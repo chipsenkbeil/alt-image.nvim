@@ -137,7 +137,7 @@ describe('alt-image.iterm2 relative=buffer', function()
     img = H.fresh_provider('iterm2')
   end)
 
-  it('places an extmark with virt_lines reserving height + 2*pad rows', function()
+  it('places an extmark with virt_lines reserving height rows', function()
     local buf = vim.api.nvim_create_buf(true, false)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'line1', 'line2', 'line3' })
     local id = img.set('PNGBYTES', { relative = 'buffer', buf = buf,
@@ -147,7 +147,7 @@ describe('alt-image.iterm2 relative=buffer', function()
     local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
     assert.is_true(#marks >= 1)
     local virt = marks[1][4].virt_lines or {}
-    assert.equals(4 + 2 * 1, #virt)
+    assert.equals(4, #virt)
     img.del(id)
   end)
 

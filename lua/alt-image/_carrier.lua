@@ -25,8 +25,8 @@ end
 
 local function size_in_cells(opts)
   local pad = opts.pad or 0
-  local w = (opts.width or 1) + 2 * pad
-  local h = (opts.height or 1) + 2 * pad
+  local w = (opts.width or 1) + pad
+  local h = opts.height or 1
   return w, h
 end
 
@@ -64,7 +64,7 @@ local function resolve_screen_pos(c)
     if not vim.api.nvim_win_is_valid(c.winid) then return nil end
     local pos = vim.api.nvim_win_get_position(c.winid)
     local pad = (c.opts and c.opts.pad) or 0
-    return { row = pos[1] + 1 + pad, col = pos[2] + 1 + pad }
+    return { row = pos[1] + 1, col = pos[2] + 1 + pad }
   else
     -- relative='buffer': find a window showing this buffer; use screenpos.
     if not vim.api.nvim_buf_is_valid(c.bufnr) then return nil end
@@ -81,7 +81,7 @@ local function resolve_screen_pos(c)
         if ok and sp and sp.row > 0 then
           -- The image goes in the virt_lines BELOW the anchor line, not on it.
           -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
-          return { row = sp.row + 1 + pad, col = sp.col + pad }
+          return { row = sp.row + 1, col = sp.col + pad }
         end
       end
     end
