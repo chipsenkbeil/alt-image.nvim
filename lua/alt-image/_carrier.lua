@@ -1,6 +1,11 @@
 -- lua/alt-image/_carrier.lua
 -- Reserves screen real estate via floating windows / extmarks for placements
--- with relative != 'ui', and triggers re-emit on scroll/resize.
+-- with relative != 'ui'. Layout-change autocmds delegate to the render
+-- coordinator, which handles the synchronized clear+redraw across all
+-- placements (carrier-tracked or not).
+--
+-- Provider contract: providers must expose `_emit_at(id, screen_pos)`. The
+-- carrier itself does not call providers directly anymore.
 
 local M = {}
 
@@ -71,8 +76,7 @@ local function resolve_screen_pos(c)
   end
 end
 
--- Register a new placement that needs a carrier. Provider passes itself so the
--- carrier can call provider._reemit(id, screen_pos) on layout changes.
+-- Register a new placement that needs a carrier.
 -- Returns initial screen_pos {row, col}, or nil if offscreen.
 function M.register(provider, id, opts)
   local c = { provider = provider, id = id, opts = opts }
@@ -104,16 +108,20 @@ function M.unregister(provider, id)
   carriers[key] = nil
 end
 
+-- Public position lookup used by the render coordinator's get_pos closure
+-- factories on the providers. Returns nil if the carrier is gone or offscreen.
+function M.get_pos(provider, id)
+  local c = carriers[provider_key(provider, id)]
+  if not c then return nil end
+  return resolve_screen_pos(c)
+end
+
 local function refresh_all()
-  for _, c in pairs(carriers) do
-    local pos = resolve_screen_pos(c)
-    if pos and (not c.last_pos
-                or pos.row ~= c.last_pos.row
-                or pos.col ~= c.last_pos.col) then
-      c.last_pos = pos
-      c.provider._reemit(c.id, pos)
-    end
-  end
+  -- Layout changed; positions may have changed. Let _render do the synchronized
+  -- redraw across all placements (it knows about both carrier-backed ones and
+  -- relative='ui' ones, so re-emitting them all keeps the framebuffer correct).
+  if next(carriers) == nil then return end
+  require('alt-image._render').rerender_all()
 end
 
 -- Single debounced refresh: a burst of layout events => one redraw.
