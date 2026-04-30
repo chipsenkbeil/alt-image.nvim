@@ -13,13 +13,12 @@ describe('harness', function()
 end)
 
 describe('_util', function()
-  it('query_csi falls back when vim.tty absent', function()
+  it('query_csi falls back synchronously when vim.tty absent', function()
     local saved = rawget(vim, 'tty')
     rawset(vim, 'tty', nil)
     local done = false
     util.query_csi('whatever', { timeout = 10 }, function(r) done = (r == nil) end)
-    vim.wait(50, function() return done end)
-    assert.is_true(done)
+    assert.is_true(done)  -- synchronous; no vim.wait needed
     rawset(vim, 'tty', saved)
   end)
 end)

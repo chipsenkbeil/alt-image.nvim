@@ -10,8 +10,10 @@ function M.check()
     h.ok('Sixel protocol: supported' .. (msg and (' (' .. msg .. ')') or ''))
   else
     h.error('Sixel protocol: not detected. '
-         .. (msg or 'Use a sixel-capable terminal (foot, mlterm, contour, '
-                 .. 'xterm +sixel) or set TERM=xterm-sixel.'))
+         .. (msg or 'Detection failed. Try a sixel-capable terminal '
+                 .. '(iTerm.app, WezTerm, foot, mlterm, contour, xterm +sixel), '
+                 .. 'or set TERM=xterm-sixel, or call '
+                 .. 'require("alt-image").setup({ protocol = "sixel" }) to force.'))
   end
 
   if vim.env.TERM_PROGRAM == 'Apple_Terminal' then

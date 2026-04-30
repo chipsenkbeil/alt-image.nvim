@@ -20,6 +20,10 @@ local SYNC_END   = '\027[?2026l'
 local KNOWN_SIXEL_TERMS = {
   foot = true, mlterm = true, contour = true,
 }
+local SUPPORTING_TERM_PROGRAMS = {
+  ['iTerm.app'] = true,  -- iTerm2 v3.5+ supports sixel
+  ['WezTerm']   = true,
+}
 
 -- state[id] = { data = bytes, opts = canonical_opts, sixel_cache = string|nil, id = id }
 local state = {}
@@ -155,6 +159,10 @@ function M._supported(opts)
   opts = opts or {}
   if vim.env.TERM_PROGRAM == 'Apple_Terminal' then
     return false, 'Apple Terminal does not support sixel'
+  end
+  local tp = vim.env.TERM_PROGRAM
+  if tp and SUPPORTING_TERM_PROGRAMS[tp] then
+    return true, 'TERM_PROGRAM=' .. tp
   end
   local term = vim.env.TERM or ''
   if term:find('sixel', 1, true) or KNOWN_SIXEL_TERMS[term] then

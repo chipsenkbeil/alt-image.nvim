@@ -178,14 +178,16 @@ function M.query_csi(payload, opts, cb)
   if _has_vim_tty('query_csi') then
     return vim.tty.query_csi(payload, opts, cb)
   end
-  vim.defer_fn(function() cb(nil) end, (opts and opts.timeout) or 1000)
+  -- No probe support on this Neovim. Fail fast so callers don't block.
+  cb(nil)
 end
 
 function M.query_apc(payload, opts, cb)
   if _has_vim_tty('query_apc') then
     return vim.tty.query_apc(payload, opts, cb)
   end
-  vim.defer_fn(function() cb(nil) end, (opts and opts.timeout) or 1000)
+  -- No probe support on this Neovim. Fail fast so callers don't block.
+  cb(nil)
 end
 
 return M

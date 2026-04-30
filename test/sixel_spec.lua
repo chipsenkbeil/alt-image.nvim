@@ -74,6 +74,24 @@ describe('alt-image.sixel _supported', function()
       assert.is_false(require('alt-image.sixel')._supported({ timeout = 10 }))
     end)
   end)
+
+  it('returns true via TERM_PROGRAM=iTerm.app', function()
+    H.with_env({ TERM_PROGRAM = 'iTerm.app', TERM = 'xterm-256color' }, function()
+      package.loaded['alt-image.sixel'] = nil
+      package.loaded['alt-image._render'] = nil
+      package.loaded['alt-image._carrier'] = nil
+      assert.is_true(require('alt-image.sixel')._supported())
+    end)
+  end)
+
+  it('returns true via TERM_PROGRAM=WezTerm', function()
+    H.with_env({ TERM_PROGRAM = 'WezTerm', TERM = 'xterm-256color' }, function()
+      package.loaded['alt-image.sixel'] = nil
+      package.loaded['alt-image._render'] = nil
+      package.loaded['alt-image._carrier'] = nil
+      assert.is_true(require('alt-image.sixel')._supported())
+    end)
+  end)
 end)
 
 describe('alt-image.sixel relative=editor', function()
