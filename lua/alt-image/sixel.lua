@@ -67,41 +67,68 @@ local function derive_dims(data, opts)
   opts.height = opts.height or math.ceil(px_h / cell_h)
 end
 
-local function build_sixel(s)
-  if s.sixel_cache then return s.sixel_cache end
+local function ensure_resized(s)
+  if s.resized_rgba then return s.resized_rgba, s.resized_w, s.resized_h end
   local img = png.decode(s.data)
   local rgba, w, h = img.pixels, img.width, img.height
+  local cw, ch = util.cell_pixel_size()
   if s.opts.width or s.opts.height then
-    util.query_cell_size()
-    local cw, ch = util.cell_pixel_size()
-    local tw = (s.opts.width  or math.ceil(w / cw)) * cw
-    local th = (s.opts.height or math.ceil(h / ch)) * ch
-    rgba, w, h = senc.resize(rgba, w, h, tw, th)
+    local target_w = (s.opts.width  or math.ceil(w / cw)) * cw
+    local target_h = (s.opts.height or math.ceil(h / ch)) * ch
+    rgba, w, h = senc.resize(rgba, w, h, target_w, target_h)
   end
+  s.resized_rgba, s.resized_w, s.resized_h = rgba, w, h
+  return rgba, w, h
+end
+
+local function build_sixel(s)
+  if s.sixel_cache then return s.sixel_cache end
+  util.query_cell_size()
+  local rgba, w, h = ensure_resized(s)
   s.sixel_cache = senc.encode_sixel(rgba, w, h)
   return s.sixel_cache
 end
 
 -- Build a sixel DCS for a sub-rectangle of the source image. The src record
--- describes the crop in image cells; we resize the full image to the placement's
--- target pixel dims, slice out the requested sub-rectangle, and encode.
+-- describes the crop in image cells; we use the cached resized buffer, slice
+-- out the requested sub-rectangle, and encode.
 local function build_sixel_cropped(s, src)
-  local img = png.decode(s.data)
-  local rgba, w, h = img.pixels, img.width, img.height
   util.query_cell_size()
   local cw, ch = util.cell_pixel_size()
-  -- Resize first to the placement's full target dims so cell-based offsets in
-  -- src translate cleanly to pixel offsets. Mirrors build_sixel's resize step.
-  if s.opts.width or s.opts.height then
-    local tw = (s.opts.width  or math.ceil(w / cw)) * cw
-    local th = (s.opts.height or math.ceil(h / ch)) * ch
-    rgba, w, h = senc.resize(rgba, w, h, tw, th)
-  end
+  local rgba, w, h = ensure_resized(s)
+  -- Resize has already happened in ensure_resized; now crop using cell offsets.
   local cropped, cw_px, ch_px = senc.crop_rgba(
     rgba, w, h,
     src.x * cw, src.y * ch, src.w * cw, src.h * ch
   )
   return senc.encode_sixel(cropped, cw_px, ch_px)
+end
+
+local CROP_CACHE_MAX = 16
+
+local function crop_cache_get(s, key)
+  s.sixel_cache_by_src = s.sixel_cache_by_src or {}
+  s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
+  local v = s.sixel_cache_by_src[key]
+  if v then
+    -- Move key to end (most recently used).
+    for i, k in ipairs(s.sixel_cache_by_src_order) do
+      if k == key then table.remove(s.sixel_cache_by_src_order, i); break end
+    end
+    table.insert(s.sixel_cache_by_src_order, key)
+  end
+  return v
+end
+
+local function crop_cache_put(s, key, value)
+  s.sixel_cache_by_src = s.sixel_cache_by_src or {}
+  s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
+  s.sixel_cache_by_src[key] = value
+  table.insert(s.sixel_cache_by_src_order, key)
+  while #s.sixel_cache_by_src_order > CROP_CACHE_MAX do
+    local evict = table.remove(s.sixel_cache_by_src_order, 1)
+    s.sixel_cache_by_src[evict] = nil
+  end
 end
 
 -- Public so _render can call us. Reads state[id], emits sixel DCS at screen_pos.
@@ -122,12 +149,13 @@ function M._emit_at(id, screen_pos)
   if is_full then
     sixel = build_sixel(s)
   else
-    s.sixel_cache_by_src = s.sixel_cache_by_src or {}
     local key = string.format('%d,%d,%d,%d', src.x, src.y, src.w, src.h)
-    if not s.sixel_cache_by_src[key] then
-      s.sixel_cache_by_src[key] = build_sixel_cropped(s, src)
+    local cached = crop_cache_get(s, key)
+    if not cached then
+      cached = build_sixel_cropped(s, src)
+      crop_cache_put(s, key, cached)
     end
-    sixel = s.sixel_cache_by_src[key]
+    sixel = cached
   end
   local cmove = string.format('\027[%d;%dH',
                               screen_pos and screen_pos.row or (opts.row or 1),
@@ -173,6 +201,10 @@ function M.set(data_or_id, opts)
     s.opts = vim.tbl_extend('force', s.opts, upd)
     s.sixel_cache = nil  -- opts changed -> may need re-encode if size changed
     s.sixel_cache_by_src = nil  -- crop cache also stale on opts change
+    s.sixel_cache_by_src_order = nil
+    s.resized_rgba = nil  -- width/height change invalidates cached resize
+    s.resized_w = nil
+    s.resized_h = nil
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
