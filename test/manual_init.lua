@@ -100,6 +100,76 @@ end, {
   complete = function() return { 'ui', 'editor', 'off' } end,
 })
 
+-- Helper to identify the active vim.ui.img provider
+local function provider_name()
+  local img = vim.ui.img
+  if img == require('alt-image.iterm2') then return 'alt-image.iterm2' end
+  if img == require('alt-image.sixel')  then return 'alt-image.sixel'  end
+  if img == require('alt-image')        then return 'alt-image (autodetect)' end
+  return '<unknown>'
+end
+
+vim.api.nvim_create_user_command('AltImageInfo', function()
+  local lines = {
+    'alt-image.nvim diagnostics',
+    '==========================',
+    'Terminal env:',
+    string.format('  TERM           = %s', tostring(vim.env.TERM)),
+    string.format('  TERM_PROGRAM   = %s', tostring(vim.env.TERM_PROGRAM)),
+    string.format('  COLORTERM      = %s', tostring(vim.env.COLORTERM)),
+    string.format('  TMUX           = %s', tostring(vim.env.TMUX)),
+    string.format('  SSH_CONNECTION = %s', tostring(vim.env.SSH_CONNECTION)),
+    '',
+    'Neovim:',
+    string.format('  version        = v%d.%d.%d',
+      vim.version().major, vim.version().minor, vim.version().patch),
+    string.format('  vim.tty        = %s',
+      vim.tty and 'present' or 'absent (using polyfill)'),
+    string.format('  query_csi      = %s',
+      (vim.tty and type(vim.tty.query_csi) == 'function') and 'available' or 'not available'),
+    '',
+    'Active vim.ui.img provider:',
+    '  module         = ' .. provider_name(),
+    '',
+    'Per-provider _supported():',
+  }
+  local i_ok, i_msg = require('alt-image.iterm2')._supported()
+  local s_ok, s_msg = require('alt-image.sixel')._supported()
+  table.insert(lines, string.format('  iterm2._supported() = %s, %s',
+    tostring(i_ok), i_msg or 'no message'))
+  table.insert(lines, string.format('  sixel._supported()  = %s, %s',
+    tostring(s_ok), s_msg or 'no message'))
+  for _, l in ipairs(lines) do print(l) end
+end, {})
+
+vim.api.nvim_create_user_command('AltImageProvider', function(o)
+  local arg = o.args ~= '' and o.args or 'auto'
+  if arg ~= 'iterm2' and arg ~= 'sixel' and arg ~= 'auto' then
+    print('Usage: AltImageProvider {iterm2|sixel|auto}')
+    return
+  end
+
+  -- Clear old placements via the currently-active provider
+  pcall(function() vim.ui.img.del(math.huge) end)
+
+  -- If mouse-follow is active, kill it (its mouse_state.id was tied to the old provider).
+  pcall(function() vim.cmd('AltImageMouse off') end)
+
+  if arg == 'iterm2' then
+    vim.ui.img = require('alt-image.iterm2')
+  elseif arg == 'sixel' then
+    vim.ui.img = require('alt-image.sixel')
+  else
+    -- auto: reset autodetect cache + reload alt-image so detect() runs fresh
+    package.loaded['alt-image'] = nil
+    vim.ui.img = require('alt-image')
+  end
+  print('AltImageProvider: now using ' .. provider_name())
+end, {
+  nargs = '?',
+  complete = function() return { 'iterm2', 'sixel', 'auto' } end,
+})
+
 print('alt-image.nvim smoke test ready.')
 print('Try:')
 print('  :AltImageDemo ui|editor|buffer')
@@ -107,4 +177,6 @@ print('  :AltImageDel <id>     (or `inf` to clear all)')
 print('  :AltImageMouse ui     (image follows mouse, absolute terminal coords)')
 print('  :AltImageMouse editor (image follows mouse, relative to editor)')
 print('  :AltImageMouse off    (stop following)')
+print('  :AltImageInfo                    (diagnostics: terminal + provider state)')
+print('  :AltImageProvider iterm2|sixel|auto  (switch vim.ui.img provider)')
 print('  :checkhealth alt-image alt-image.iterm2 alt-image.sixel')
