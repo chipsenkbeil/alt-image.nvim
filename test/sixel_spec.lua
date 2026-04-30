@@ -161,4 +161,19 @@ describe('alt-image.sixel relative=buffer', function()
     assert.equals(4 + 2 * 1, #virt)
     img.del(id)
   end)
+
+  it('does not error when buffer shrinks below the extmark', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'one', 'two', 'three', 'four' })
+    -- Place image anchored to line 4
+    local id = img.set(png_bytes, { relative = 'buffer', buf = buf,
+                                    row = 4, col = 1, width = 4, height = 4 })
+    -- Truncate buffer so line 4 no longer exists
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'only one line' })
+    -- Force a render tick; should not throw E966
+    local render = require('alt-image._render')
+    local ok, err = pcall(function() render.flush() end)
+    assert.is_true(ok, 'render.flush after buffer shrink errored: ' .. tostring(err))
+    img.del(id)
+  end)
 end)

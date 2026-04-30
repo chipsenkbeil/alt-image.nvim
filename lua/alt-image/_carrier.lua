@@ -65,12 +65,17 @@ local function resolve_screen_pos(c)
     return { row = pos[1] + 1, col = pos[2] + 1 }
   else
     -- relative='buffer': find a window showing this buffer; use screenpos.
+    if not vim.api.nvim_buf_is_valid(c.bufnr) then return nil end
     local mark = vim.api.nvim_buf_get_extmark_by_id(c.bufnr, NS, c.extmark_id, {})
     if not mark or not mark[1] then return nil end
+    local line = mark[1] + 1
+    local line_count = vim.api.nvim_buf_line_count(c.bufnr)
+    if line < 1 or line > line_count then return nil end
+    local col  = (mark[2] or 0) + 1
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
-        local sp = vim.fn.screenpos(win, mark[1] + 1, (mark[2] or 0) + 1)
-        if sp.row > 0 then
+        local ok, sp = pcall(vim.fn.screenpos, win, line, col)
+        if ok and sp and sp.row > 0 then
           -- The image goes in the virt_lines BELOW the anchor line, not on it.
           -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
           return { row = sp.row + 1, col = sp.col }
