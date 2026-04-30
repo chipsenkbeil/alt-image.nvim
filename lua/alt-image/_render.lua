@@ -53,13 +53,22 @@ end
 local function tick(sync)
   if is_drawing then return end
 
-  -- Collect dirty placements.
-  local dirty = {}
+  -- 1. Collect initially-dirty placements and detect any movement.
+  local need_clear = clear_pending
+  local initially_dirty = {}
   for _, p in pairs(placements) do
-    if p.redraw then dirty[#dirty + 1] = p end
+    if p.redraw then
+      local pos = p.get_pos()
+      if pos and p.last_pos
+         and (pos.row ~= p.last_pos.row or pos.col ~= p.last_pos.col)
+      then
+        need_clear = true
+      end
+      initially_dirty[#initially_dirty + 1] = p
+    end
   end
 
-  if #dirty == 0 then
+  if #initially_dirty == 0 then
     -- Idle path. If something cleared but no placements remain dirty, we
     -- still want a clear to happen (e.g. the last placement was unregistered).
     if clear_pending then
@@ -81,38 +90,46 @@ local function tick(sync)
     return
   end
 
-  -- Compute new positions and decide whether we need a framebuffer clear.
-  local need_clear = false
+  -- 2. If clearing, expand to full registry: every placement loses its pixels
+  --    when mode() fires, so every placement must be re-emitted.
+  local emit_set
+  if need_clear then
+    emit_set = {}
+    for _, p in pairs(placements) do emit_set[#emit_set + 1] = p end
+  else
+    emit_set = initially_dirty
+  end
+
+  -- 3. Resolve current positions for the emit set.
   local resolved = {}
-  for _, p in ipairs(dirty) do
+  for _, p in ipairs(emit_set) do
     local pos = p.get_pos()
     resolved[p] = pos
-    if not pos_eq(pos, p.last_pos) then need_clear = true end
   end
 
   is_drawing = true
   util.term_send(SYNC_START)
-  if need_clear or clear_pending then
+  if need_clear then
     vim.cmd.mode()
   end
 
-  for _, p in ipairs(dirty) do
+  -- 4. Emit.
+  for _, p in ipairs(emit_set) do
     local pos = resolved[p]
     if pos then p.provider._emit_at(p.id, pos) end
     p.last_pos = pos
     p.redraw = false
   end
 
-  if sync then
+  local function finish()
     util.term_send(SYNC_END)
     is_drawing = false
     clear_pending = false
+  end
+  if sync then
+    finish()
   else
-    vim.defer_fn(function()
-      util.term_send(SYNC_END)
-      is_drawing = false
-      clear_pending = false
-    end, DEFER_END_MS)
+    vim.defer_fn(finish, DEFER_END_MS)
   end
 end
 

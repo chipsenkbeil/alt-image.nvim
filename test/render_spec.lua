@@ -57,4 +57,25 @@ describe('alt-image._render', function()
     render.flush()
     assert.matches('\027%[%?2026h', H.captured())
   end)
+
+  it('a clear-triggering invalidate redraws ALL placements, not just the dirty one', function()
+    local emitted = { [1] = 0, [2] = 0, [3] = 0 }
+    local fake = {
+      _emit_at = function(id, _pos) emitted[id] = (emitted[id] or 0) + 1 end,
+    }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.register(fake, 2, function() return { row = 2, col = 2 } end)
+    render.register(fake, 3, function() return { row = 3, col = 3 } end)
+    render.flush()  -- initial paint: all three emitted once
+    assert.equals(1, emitted[1])
+    assert.equals(1, emitted[2])
+    assert.equals(1, emitted[3])
+    -- Mark only id 1 dirty WITH clear flag.
+    render.invalidate(fake, 1, true)
+    render.flush()
+    -- Because clear_pending was set, all three should have been re-emitted.
+    assert.equals(2, emitted[1])
+    assert.equals(2, emitted[2])
+    assert.equals(2, emitted[3])
+  end)
 end)
