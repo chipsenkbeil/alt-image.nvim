@@ -1,5 +1,11 @@
 local H = require('test.helpers')
 
+local function read_fixture()
+  local f = io.open('test/fixtures/4x4.png', 'rb')
+  local b = f:read('*a'); f:close()
+  return b
+end
+
 describe('alt-image.iterm2 set/get/del', function()
   local img
   before_each(function()
@@ -214,5 +220,118 @@ describe('alt-image.iterm2 relative=buffer', function()
     local _, count = string.gsub(cap, '\027%]1337;File=', '')
     assert.equals(2, count)
     img.del(id); vim.cmd('only')
+  end)
+
+  it('returns cropped src when image extends past window bottom', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('resize 3')
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    local carrier = require('alt-image._carrier')
+    local iterm2_mod = require('alt-image.iterm2')
+    local positions = carrier.get_positions(iterm2_mod, id)
+    assert.is_true(#positions >= 1)
+    local pos = positions[1]
+    -- The image is 10 cells tall but the window is only 3 lines (with the
+    -- buffer's single line consuming row 1, leaving 2 cells for the image).
+    assert.equals(2, pos.src.h)
+    assert.equals(4, pos.src.w)
+    assert.equals(0, pos.src.x)
+    assert.equals(0, pos.src.y)
+    img.del(id)
+    vim.cmd('resize')
+  end)
+
+  it('returns cropped src.w when image extends past window right edge', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('vertical resize 5')
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=10, height=4 })
+    local carrier = require('alt-image._carrier')
+    local iterm2_mod = require('alt-image.iterm2')
+    local positions = carrier.get_positions(iterm2_mod, id)
+    assert.is_true(#positions >= 1)
+    local pos = positions[1]
+    assert.is_true(pos.src.w > 0, 'image should have positive width')
+    assert.is_true(pos.src.w <= 10, 'image width should be at most 10')
+    assert.equals(4, pos.src.h)
+    assert.is_true(pos.src.x >= 0, 'x offset should be non-negative')
+    assert.equals(0, pos.src.y)
+    img.del(id)
+    vim.cmd('vertical resize 80')
+  end)
+
+  it('returns cropped src.h when image extends past window top', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'a', 'b', 'c', 'd', 'e' })
+    vim.api.nvim_set_current_buf(buf)
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=3, col=1, width=4, height=8 })
+    vim.cmd('normal! G')
+    vim.cmd('resize 3')
+    local carrier = require('alt-image._carrier')
+    local iterm2_mod = require('alt-image.iterm2')
+    local positions = carrier.get_positions(iterm2_mod, id)
+    if #positions >= 1 then
+      local pos = positions[1]
+      assert.is_true(pos.src.h > 0, 'image should still be partially visible')
+      assert.is_true(pos.src.h <= 8, 'image height should be at most 8')
+    end
+    img.del(id)
+    vim.cmd('resize')
+  end)
+
+  it('returns cropped src.x when image extends past window left edge', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('vertical resize 3')
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=2, width=10, height=4 })
+    local carrier = require('alt-image._carrier')
+    local iterm2_mod = require('alt-image.iterm2')
+    local positions = carrier.get_positions(iterm2_mod, id)
+    if #positions >= 1 then
+      local pos = positions[1]
+      assert.is_true(pos.src.w > 0, 'image should have positive width')
+      assert.is_true(pos.src.w <= 10, 'image width should be at most 10')
+    end
+    img.del(id)
+    vim.cmd('vertical resize 80')
+  end)
+
+  it('emits OSC 1337 with cropped dimensions when src is a sub-rect', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('resize 3')
+    H.reset_capture()
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    -- The image spans 10 cells but the window only fits 2 image rows; src.h=2.
+    -- The provider should crop the PNG and emit the cropped dims (height=2)
+    -- rather than the original height=10.
+    local cap = H.captured()
+    local seq = cap:match('\027%]1337;File=[^\007]*\007')
+    assert.is_true(seq ~= nil, 'expected an OSC 1337 sequence in capture')
+    local r = H.parse_iterm2_seq(seq)
+    assert.equals('4', r.args.width)
+    assert.equals('2', r.args.height)
+    -- The payload must decode as a valid PNG (round-trips through _png.decode).
+    local pdec = require('alt-image._png')
+    local raw = vim.base64.decode(r.payload)
+    local decoded = pdec.decode(raw)
+    assert.is_true(decoded.width >= 1)
+    assert.is_true(decoded.height >= 1)
+    img.del(id); vim.cmd('resize')
   end)
 end)

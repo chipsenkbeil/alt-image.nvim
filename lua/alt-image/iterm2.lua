@@ -3,8 +3,11 @@
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_iterm2.lua
 
-local util    = require('alt-image._util')
-local render  = require('alt-image._render')
+local util       = require('alt-image._util')
+local render     = require('alt-image._render')
+local png        = require('alt-image._png')
+local senc       = require('alt-image._sixel_encode')   -- for crop_rgba helper
+local png_encode = require('alt-image._png_encode')
 
 local M = {}
 
@@ -13,7 +16,11 @@ local FAST_TERM_PROGRAMS = {
   ['WezTerm']   = true,
 }
 
--- Per-id placement state. state[id] = { data = bytes, opts = canonical_opts, id = id }
+-- Per-id placement state.
+-- state[id] = { data = bytes, opts = canonical_opts, id = id,
+--               decoded_rgba = string|nil, decoded_w = int|nil, decoded_h = int|nil,
+--               png_cache_by_src = { [key]=string },
+--               png_cache_by_src_order = { key, ... } }
 local state = {}
 local next_id = 1
 
@@ -61,20 +68,110 @@ local function derive_dims(data, opts)
   opts.height = opts.height or math.ceil(px_h / cell_h)
 end
 
+---Decode the source PNG to RGBA once and cache on the placement state.
+---Unlike sixel, we don't resize: iTerm2's protocol scales via the width=N/
+---height=M cell args itself. We only need the original RGBA for cropping.
+---@param s table placement state
+---@return string rgba, integer w, integer h
+local function ensure_decoded(s)
+  if s.decoded_rgba then return s.decoded_rgba, s.decoded_w, s.decoded_h end
+  local img = png.decode(s.data)
+  s.decoded_rgba, s.decoded_w, s.decoded_h = img.pixels, img.width, img.height
+  return s.decoded_rgba, s.decoded_w, s.decoded_h
+end
+
+---Crop the source image to a sub-rectangle and re-encode as PNG.
+---@param s table placement state
+---@param src table { x, y, w, h } in cell units
+---@return string png_bytes, integer cw_px, integer ch_px
+local function build_png_cropped(s, src)
+  util.query_cell_size()
+  local rgba, w, h = ensure_decoded(s)
+  local cw, ch = util.cell_pixel_size()
+  -- Map cell-unit src -> pixel-unit crop. The image's pixel dimensions are the
+  -- decoded dims; we approximate "the image as it would render at opts.width
+  -- x opts.height cells" by mapping a fraction of the source. This mirrors
+  -- the sixel path's intent: crop in image-cell space.
+  local opts = s.opts
+  local full_w_cells = opts.width  or math.ceil(w / cw)
+  local full_h_cells = opts.height or math.ceil(h / ch)
+  -- Convert cell coords in target render to source pixel coords.
+  local px_per_cell_x = w / full_w_cells
+  local px_per_cell_y = h / full_h_cells
+  local x_px = math.floor(src.x * px_per_cell_x + 0.5)
+  local y_px = math.floor(src.y * px_per_cell_y + 0.5)
+  local w_px = math.floor(src.w * px_per_cell_x + 0.5)
+  local h_px = math.floor(src.h * px_per_cell_y + 0.5)
+  if w_px < 1 then w_px = 1 end
+  if h_px < 1 then h_px = 1 end
+  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
+  return png_encode.encode(cropped, cw_px, ch_px), cw_px, ch_px
+end
+
+local CROP_CACHE_MAX = 16
+
+local function crop_cache_get(s, key)
+  s.png_cache_by_src = s.png_cache_by_src or {}
+  s.png_cache_by_src_order = s.png_cache_by_src_order or {}
+  local v = s.png_cache_by_src[key]
+  if v then
+    -- Move key to end (most recently used).
+    for i, k in ipairs(s.png_cache_by_src_order) do
+      if k == key then table.remove(s.png_cache_by_src_order, i); break end
+    end
+    table.insert(s.png_cache_by_src_order, key)
+  end
+  return v
+end
+
+local function crop_cache_put(s, key, value)
+  s.png_cache_by_src = s.png_cache_by_src or {}
+  s.png_cache_by_src_order = s.png_cache_by_src_order or {}
+  s.png_cache_by_src[key] = value
+  table.insert(s.png_cache_by_src_order, key)
+  while #s.png_cache_by_src_order > CROP_CACHE_MAX do
+    local evict = table.remove(s.png_cache_by_src_order, 1)
+    s.png_cache_by_src[evict] = nil
+  end
+end
+
 -- Public so _render can call us. Reads state[id], emits OSC 1337 at screen_pos.
 function M._emit_at(id, screen_pos)
   local s = state[id]
   if not s then return end
-  local data, opts = s.data, s.opts
+  local opts = s.opts
+  local src = screen_pos and screen_pos.src
+  -- is_full: route to the original-PNG fast path. Guard against nil dims so
+  -- the equality check is well-defined; if dims are missing (e.g. ui mode
+  -- without explicit dims) we treat the placement as full to avoid crashing
+  -- in build_png_cropped on `nil * px_per_cell`.
+  local is_full = (not src)
+                  or (not opts.width) or (not opts.height)
+                  or (src.x == 0 and src.y == 0
+                      and src.w == opts.width and src.h == opts.height)
+  local data, width_cells, height_cells
+  if is_full then
+    data = s.data
+    width_cells, height_cells = opts.width, opts.height
+  else
+    local key = string.format('%d,%d,%d,%d', src.x, src.y, src.w, src.h)
+    local cached = crop_cache_get(s, key)
+    if not cached then
+      cached = build_png_cropped(s, src)
+      crop_cache_put(s, key, cached)
+    end
+    data = cached
+    width_cells, height_cells = src.w, src.h
+  end
 
   local b64 = vim.base64.encode(data)
   local args = {
     'size=' .. #data,
     'inline=1',
-    'preserveAspectRatio=' .. ((opts.width and opts.height) and 0 or 1),
+    'preserveAspectRatio=' .. ((width_cells and height_cells) and 0 or 1),
   }
-  if opts.width  then args[#args + 1] = 'width='  .. opts.width  end
-  if opts.height then args[#args + 1] = 'height=' .. opts.height end
+  if width_cells  then args[#args + 1] = 'width='  .. width_cells  end
+  if height_cells then args[#args + 1] = 'height=' .. height_cells end
 
   local cs = {
     save    = '\0277',
@@ -127,6 +224,13 @@ function M.set(data_or_id, opts)
     local upd = canonicalize(opts)
     if not (opts and opts.relative) then upd.relative = s.opts.relative end
     s.opts = vim.tbl_extend('force', s.opts, upd)
+    -- opts changed -> any cached crop may be stale; drop the LRU and decoded
+    -- buffer (the latter only matters if data ever changed, but cheap to drop).
+    s.png_cache_by_src = nil
+    s.png_cache_by_src_order = nil
+    s.decoded_rgba = nil
+    s.decoded_w = nil
+    s.decoded_h = nil
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
@@ -145,7 +249,8 @@ function M.set(data_or_id, opts)
   local opts_canonical = canonicalize(opts)
   -- If non-ui and dims missing, derive from the PNG IHDR.
   derive_dims(data_or_id, opts_canonical)
-  state[id] = { data = data_or_id, opts = opts_canonical, id = id }
+  state[id] = { data = data_or_id, opts = opts_canonical, id = id,
+                png_cache_by_src = {}, png_cache_by_src_order = {} }
 
   if state[id].opts.relative ~= 'ui' then
     require('alt-image._carrier').register(M, id, state[id].opts)
