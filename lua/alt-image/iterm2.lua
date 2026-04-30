@@ -8,6 +8,7 @@ local render     = require('alt-image._render')
 local png        = require('alt-image._png')
 local senc       = require('alt-image._sixel_encode')   -- for crop_rgba helper
 local png_encode = require('alt-image._png_encode')
+local lru        = require('alt-image._lru')
 
 local M = {}
 
@@ -118,31 +119,16 @@ local function build_png_cropped(s, src)
   return png_encode.encode(cropped, cw_px, ch_px), cw_px, ch_px
 end
 
-local CROP_CACHE_MAX = 16
-
 local function crop_cache_get(s, key)
   s.png_cache_by_src = s.png_cache_by_src or {}
   s.png_cache_by_src_order = s.png_cache_by_src_order or {}
-  local v = s.png_cache_by_src[key]
-  if v then
-    -- Move key to end (most recently used).
-    for i, k in ipairs(s.png_cache_by_src_order) do
-      if k == key then table.remove(s.png_cache_by_src_order, i); break end
-    end
-    table.insert(s.png_cache_by_src_order, key)
-  end
-  return v
+  return lru.get(s.png_cache_by_src, s.png_cache_by_src_order, key)
 end
 
 local function crop_cache_put(s, key, value)
   s.png_cache_by_src = s.png_cache_by_src or {}
   s.png_cache_by_src_order = s.png_cache_by_src_order or {}
-  s.png_cache_by_src[key] = value
-  table.insert(s.png_cache_by_src_order, key)
-  while #s.png_cache_by_src_order > CROP_CACHE_MAX do
-    local evict = table.remove(s.png_cache_by_src_order, 1)
-    s.png_cache_by_src[evict] = nil
-  end
+  lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, value)
 end
 
 -- Public so _render can call us. Reads state[id], emits OSC 1337 at screen_pos.

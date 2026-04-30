@@ -11,6 +11,7 @@ local util    = require('alt-image._util')
 local png     = require('alt-image._png')
 local senc    = require('alt-image._sixel_encode')
 local render  = require('alt-image._render')
+local lru     = require('alt-image._lru')
 
 local M = {}
 
@@ -120,31 +121,16 @@ local function build_sixel_cropped(s, src)
   return senc.encode_sixel_dispatch(cropped, cw_px, ch_px)
 end
 
-local CROP_CACHE_MAX = 16
-
 local function crop_cache_get(s, key)
   s.sixel_cache_by_src = s.sixel_cache_by_src or {}
   s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
-  local v = s.sixel_cache_by_src[key]
-  if v then
-    -- Move key to end (most recently used).
-    for i, k in ipairs(s.sixel_cache_by_src_order) do
-      if k == key then table.remove(s.sixel_cache_by_src_order, i); break end
-    end
-    table.insert(s.sixel_cache_by_src_order, key)
-  end
-  return v
+  return lru.get(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key)
 end
 
 local function crop_cache_put(s, key, value)
   s.sixel_cache_by_src = s.sixel_cache_by_src or {}
   s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
-  s.sixel_cache_by_src[key] = value
-  table.insert(s.sixel_cache_by_src_order, key)
-  while #s.sixel_cache_by_src_order > CROP_CACHE_MAX do
-    local evict = table.remove(s.sixel_cache_by_src_order, 1)
-    s.sixel_cache_by_src[evict] = nil
-  end
+  lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value)
 end
 
 -- Public so _render can call us. Reads state[id], emits sixel DCS at screen_pos.

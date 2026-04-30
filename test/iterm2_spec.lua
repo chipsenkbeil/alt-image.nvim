@@ -317,6 +317,28 @@ describe('alt-image.iterm2 relative=buffer', function()
     vim.cmd('vertical resize 80')
   end)
 
+  it('produces different src per window when one window is resized smaller', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('split')               -- two windows showing buf
+    vim.cmd('wincmd j')
+    vim.cmd('resize 3')
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    local carrier = require('alt-image._carrier')
+    local iterm2_mod = require('alt-image.iterm2')
+    local positions = carrier.get_positions(iterm2_mod, id)
+    assert.equals(2, #positions)
+    local heights = { positions[1].src.h, positions[2].src.h }
+    table.sort(heights)
+    assert.is_true(heights[1] < 10, 'one window should be cropped')
+    assert.equals(10, heights[2])
+    img.del(id)
+    vim.cmd('only')
+  end)
+
   it('emits OSC 1337 with cropped dimensions when src is a sub-rect', function()
     local png_bytes = read_fixture()
     local buf = vim.api.nvim_create_buf(true, false)

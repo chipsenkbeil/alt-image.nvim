@@ -10,16 +10,27 @@ vim.ui.img = require('alt-image')
 -- Force a specific protocol
 vim.ui.img = require('alt-image.iterm2')   -- iTerm2 / WezTerm (OSC 1337)
 vim.ui.img = require('alt-image.sixel')    -- foot, mlterm, xterm +sixel, etc.
-
--- Or via setup
-require('alt-image').setup({ protocol = 'iterm2' })  -- override autodetect
-vim.ui.img = require('alt-image')
 ```
 
 After installation, `vim.ui.img` works the same as on a kitty-capable
 terminal — same `set` / `get` / `del` / `_supported` surface, same opts
 (`row`, `col`, `width`, `height`, `zindex`, `relative` ∈ `ui|editor|buffer`,
 `buf`, `pad`).
+
+### Configuration
+
+Configure via `vim.g.alt_image` (read at call-time, so this can be set
+either before or after `require('alt-image')`):
+
+```lua
+vim.g.alt_image = {
+  -- Force a specific protocol ('iterm2' / 'sixel' / 'auto'). Default: 'auto'.
+  protocol = 'auto',
+  -- Use img2sixel / convert (ImageMagick) when present for faster encoding
+  -- and cropping. Falls back to pure Lua. Default: true.
+  accelerate = true,
+}
+```
 
 ## Healthchecks
 
