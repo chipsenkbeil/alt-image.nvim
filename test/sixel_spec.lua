@@ -73,3 +73,47 @@ describe('alt-image.sixel _supported', function()
     end)
   end)
 end)
+
+describe('alt-image.sixel relative=editor', function()
+  local img, png_bytes
+  before_each(function()
+    H.setup_capture()
+    package.loaded['alt-image.sixel'] = nil
+    img = require('alt-image.sixel')
+    png_bytes = read_fixture()
+  end)
+
+  it('opens a floating-window carrier and emits at its screen pos', function()
+    local before_wins = #vim.api.nvim_list_wins()
+    local id = img.set(png_bytes, { relative = 'editor', row = 5, col = 10,
+                                    width = 4, height = 4 })
+    assert.is_true(#vim.api.nvim_list_wins() == before_wins + 1)
+    img.del(id)
+    vim.wait(50)
+    assert.is_true(#vim.api.nvim_list_wins() == before_wins)
+  end)
+end)
+
+describe('alt-image.sixel relative=buffer', function()
+  local img, png_bytes
+  before_each(function()
+    H.setup_capture()
+    package.loaded['alt-image.sixel'] = nil
+    img = require('alt-image.sixel')
+    png_bytes = read_fixture()
+  end)
+
+  it('places an extmark with virt_lines reserving height + 2*pad rows', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'line1', 'line2', 'line3' })
+    local id = img.set(png_bytes, { relative = 'buffer', buf = buf,
+                                    row = 1, col = 1, width = 4, height = 4,
+                                    pad = 1 })
+    local ns = vim.api.nvim_create_namespace('alt-image.carrier')
+    local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+    assert.is_true(#marks >= 1)
+    local virt = marks[1][4].virt_lines or {}
+    assert.equals(4 + 2 * 1, #virt)
+    img.del(id)
+  end)
+end)

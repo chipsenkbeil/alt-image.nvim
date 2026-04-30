@@ -3,7 +3,8 @@
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_iterm2.lua
 
-local util = require('alt-image._util')
+local util    = require('alt-image._util')
+local carrier = require('alt-image._carrier')
 
 local M = {}
 
@@ -15,7 +16,7 @@ local FAST_TERM_PROGRAMS = {
   ['WezTerm']   = true,
 }
 
--- Per-id placement state. state[id] = { data = bytes, opts = canonical_opts }
+-- Per-id placement state. state[id] = { data = bytes, opts = canonical_opts, id = id }
 local state = {}
 local next_id = 1
 
@@ -39,8 +40,7 @@ local function canonicalize(opts)
   }
 end
 
-local function emit(data, opts)
-  -- relative='ui' only in this task. Carrier modes added in Tasks 11-12.
+local function emit_at(data, opts, screen_pos)
   local b64 = vim.base64.encode(data)
   local args = {
     'size=' .. #data,
@@ -52,7 +52,9 @@ local function emit(data, opts)
 
   local cursor_save    = '\0277'
   local cursor_hide    = '\027[?25l'
-  local cursor_move    = string.format('\027[%d;%dH', opts.row or 1, opts.col or 1)
+  local cursor_move    = string.format('\027[%d;%dH',
+                                       screen_pos and screen_pos.row or (opts.row or 1),
+                                       screen_pos and screen_pos.col or (opts.col or 1))
   local cursor_restore = '\0278'
   local cursor_show    = '\027[?25h'
 
@@ -62,6 +64,15 @@ local function emit(data, opts)
     .. osc
     .. cursor_restore .. cursor_show
     .. SYNC_END)
+end
+
+local function emit(s)
+  if s.opts.relative == 'ui' then
+    emit_at(s.data, s.opts, nil)
+    return
+  end
+  local pos = carrier.register(M, s.id, s.opts)
+  if pos then emit_at(s.data, s.opts, pos) end
 end
 
 function M.set(data_or_id, opts)
@@ -74,13 +85,14 @@ function M.set(data_or_id, opts)
     local s = state[data_or_id]
     if not s then error('alt-image.iterm2: unknown id ' .. tostring(data_or_id), 2) end
     s.opts = vim.tbl_extend('force', s.opts, canonicalize(opts))
-    emit(s.data, s.opts)
+    s.id = data_or_id
+    emit(s)
     return data_or_id
   end
 
   local id = new_id()
-  state[id] = { data = data_or_id, opts = canonicalize(opts) }
-  emit(state[id].data, state[id].opts)
+  state[id] = { data = data_or_id, opts = canonicalize(opts), id = id }
+  emit(state[id])
   return id
 end
 
@@ -93,14 +105,23 @@ end
 function M.del(id)
   if id == math.huge then
     local any = next(state) ~= nil
+    for k, _ in pairs(state) do carrier.unregister(M, k) end
     state = {}
     if any then vim.cmd.mode() end  -- force TUI redraw to clear pixels
     return any
   end
   if not state[id] then return false end
+  carrier.unregister(M, id)
   state[id] = nil
   vim.cmd.mode()
   return true
+end
+
+-- Called by the carrier when the carrier moves (scroll/resize).
+function M._reemit(id, screen_pos)
+  local s = state[id]
+  if not s then return end
+  emit_at(s.data, s.opts, screen_pos)
 end
 
 function M._supported(opts)
