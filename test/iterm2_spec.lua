@@ -46,6 +46,32 @@ describe('alt-image.iterm2 set/get/del', function()
     img.del(id)
   end)
 
+  it('caches base64 alongside the full PNG', function()
+    local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
+    require('alt-image._render').flush()
+    local s = require('alt-image.iterm2')._state[id]
+    assert.is_true(s ~= nil)
+    -- Both the PNG bytes and the base64 form should be cached after the
+    -- initial emit, so subsequent emits skip the base64 work.
+    assert.is_true(s.full_png ~= nil, 'full_png should be cached after flush')
+    assert.is_true(s.full_png_b64 ~= nil, 'full_png_b64 should be cached after flush')
+    -- Sanity check: the cached b64 round-trips back to the cached PNG.
+    assert.equals(s.full_png, vim.base64.decode(s.full_png_b64))
+    -- Position-only update should preserve both caches (object identity).
+    local before_png = s.full_png
+    local before_b64 = s.full_png_b64
+    img.set(id, { row = 5, col = 5 })
+    require('alt-image._render').flush()
+    assert.is_true(s.full_png == before_png)
+    assert.is_true(s.full_png_b64 == before_b64)
+    -- Dim change should invalidate both fields together.
+    img.set(id, { width = 8, height = 8 })
+    require('alt-image._render').flush()
+    assert.is_true(s.full_png ~= before_png)
+    assert.is_true(s.full_png_b64 ~= before_b64)
+    img.del(id)
+  end)
+
   it('set returns an id and emits an OSC 1337 sequence', function()
     local id = img.set('PNGBYTES', { row = 1, col = 1, width = 4, height = 4 })
     assert.is_true(type(id) == 'number')

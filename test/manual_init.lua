@@ -49,16 +49,27 @@ end, { nargs = 1 })
 -- without removing/recreating the placement (uses set(id, opts) updates).
 local mouse_state = { id = nil, mode = 'ui', mapping = nil }
 
+-- Coalesce mouse-follow updates: <MouseMove> can fire faster than the
+-- synchronous render flush completes. Defer via vim.schedule and read the
+-- latest mouse position lazily inside the scheduled callback. While a
+-- schedule is pending, subsequent fires return early — they all collapse
+-- into a single set() at the latest position.
+local update_pending = false
 local function update_from_mouse()
-  if not mouse_state.id then return end
-  local pos = vim.fn.getmousepos()
-  local opts
-  if mouse_state.mode == 'ui' then
-    opts = { relative = 'ui', row = pos.screenrow, col = pos.screencol }
-  else
-    opts = { relative = 'editor', row = pos.screenrow, col = pos.screencol }
-  end
-  vim.ui.img.set(mouse_state.id, opts)
+  if not mouse_state.id or update_pending then return end
+  update_pending = true
+  vim.schedule(function()
+    update_pending = false
+    if not mouse_state.id then return end
+    local pos = vim.fn.getmousepos()
+    local opts
+    if mouse_state.mode == 'ui' then
+      opts = { relative = 'ui', row = pos.screenrow, col = pos.screencol }
+    else
+      opts = { relative = 'editor', row = pos.screenrow, col = pos.screencol }
+    end
+    vim.ui.img.set(mouse_state.id, opts)
+  end)
 end
 
 local function mouse_off()

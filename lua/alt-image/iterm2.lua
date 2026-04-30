@@ -20,7 +20,8 @@ local FAST_TERM_PROGRAMS = {
 -- Per-id placement state.
 -- state[id] = { data = bytes, opts = canonical_opts, id = id,
 --               decoded_rgba = string|nil, decoded_w = int|nil, decoded_h = int|nil,
---               png_cache_by_src = { [key]=string },
+--               full_png = string|nil, full_png_b64 = string|nil,
+--               png_cache_by_src = { [key]={ png=string, b64=string } },
 --               png_cache_by_src_order = { key, ... } }
 local state = {}
 local next_id = 1
@@ -91,23 +92,28 @@ local function ensure_resized(s)
   return rgba, w, h
 end
 
----Encode the resized RGBA buffer back to PNG once and cache it. This is the
----data we send via OSC 1337 for the full-image fast path; the terminal sees
----image pixel dims that match the cell-pixel area exactly, so its built-in
----scaling becomes a no-op.
+---Encode the resized RGBA buffer back to PNG once and cache it, alongside its
+---base64 form. This is the data we send via OSC 1337 for the full-image fast
+---path; the terminal sees image pixel dims that match the cell-pixel area
+---exactly, so its built-in scaling becomes a no-op. The base64 cache avoids
+---paying `vim.base64.encode` on every emit (non-trivial for large images
+---under mouse-follow).
 ---@param s table placement state
----@return string png_bytes
+---@return string png_bytes, string b64
 local function ensure_full_png(s)
-  if s.full_png then return s.full_png end
+  if s.full_png and s.full_png_b64 then return s.full_png, s.full_png_b64 end
   local rgba, w, h = ensure_resized(s)
   s.full_png = png_encode.encode(rgba, w, h)
-  return s.full_png
+  s.full_png_b64 = vim.base64.encode(s.full_png)
+  return s.full_png, s.full_png_b64
 end
 
----Crop a sub-rectangle of the resized PNG and re-encode as PNG.
+---Crop a sub-rectangle of the resized PNG and re-encode as PNG. Also returns
+---the base64-encoded form so callers (and the per-src LRU) can cache both
+---together — base64 is paid once, not on every emit.
 ---@param s table placement state
 ---@param src table { x, y, w, h } in cell units
----@return string png_bytes, integer cw_px, integer ch_px
+---@return string png_bytes, string b64, integer cw_px, integer ch_px
 local function build_png_cropped(s, src)
   util.query_cell_size()
   local cw, ch = util.cell_pixel_size()
@@ -121,11 +127,12 @@ local function build_png_cropped(s, src)
   local resized_png = ensure_full_png(s)
   local accel = senc.crop_and_encode_png(resized_png, x_px, y_px, w_px, h_px)
   if accel and #accel > 0 then
-    return accel, w_px, h_px
+    return accel, vim.base64.encode(accel), w_px, h_px
   end
   local rgba, full_w, full_h = ensure_resized(s)
   local cropped, cw_px, ch_px = senc.crop_rgba(rgba, full_w, full_h, x_px, y_px, w_px, h_px)
-  return png_encode.encode(cropped, cw_px, ch_px), cw_px, ch_px
+  local png_bytes = png_encode.encode(cropped, cw_px, ch_px)
+  return png_bytes, vim.base64.encode(png_bytes), cw_px, ch_px
 end
 
 local function crop_cache_get(s, key)
@@ -154,26 +161,32 @@ function M._emit_at(id, screen_pos)
                   or (not opts.width) or (not opts.height)
                   or (src.x == 0 and src.y == 0
                       and src.w == opts.width and src.h == opts.height)
-  local data, width_cells, height_cells
+  local data, b64, width_cells, height_cells
   if is_full then
     -- Pre-resize to the cell-pixel area via nearest-neighbor before sending,
     -- so iTerm2's scaler sees a 1:1 mapping (sharp output). We fall back to
     -- the original bytes when the source isn't decodable PNG (defensive).
-    local ok, resized_png = pcall(ensure_full_png, s)
-    data = (ok and resized_png) or s.data
+    local ok, resized_png, resized_b64 = pcall(ensure_full_png, s)
+    if ok and resized_png and resized_b64 then
+      data, b64 = resized_png, resized_b64
+    else
+      data = s.data
+      b64 = vim.base64.encode(data)
+    end
     width_cells, height_cells = opts.width, opts.height
   else
     local key = string.format('%d,%d,%d,%d', src.x, src.y, src.w, src.h)
-    local cached = crop_cache_get(s, key)
-    if not cached then
-      cached = build_png_cropped(s, src)
-      crop_cache_put(s, key, cached)
+    local entry = crop_cache_get(s, key)
+    if not entry then
+      local png_bytes, b64_str = build_png_cropped(s, src)
+      entry = { png = png_bytes, b64 = b64_str }
+      crop_cache_put(s, key, entry)
     end
-    data = cached
+    data = entry.png
+    b64 = entry.b64
     width_cells, height_cells = src.w, src.h
   end
 
-  local b64 = vim.base64.encode(data)
   local args = {
     'size=' .. #data,
     'inline=1',
@@ -254,6 +267,7 @@ function M.set(data_or_id, opts)
       s.resized_w = nil
       s.resized_h = nil
       s.full_png = nil
+      s.full_png_b64 = nil
     end
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
