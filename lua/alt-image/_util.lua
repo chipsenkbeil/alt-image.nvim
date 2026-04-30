@@ -2,13 +2,11 @@
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_util.lua
 ---@class vim.ui.img._util
----@field private _tmux_initialized boolean
 ---@field private _cell_width_px integer
 ---@field private _cell_height_px integer
 ---@field private _cell_size_queried boolean
 ---@field private _on_cell_size_change? fun(w: integer, h: integer)
 local M = {
-  _tmux_initialized = false,
   _cell_width_px = 8,
   _cell_height_px = 16,
   _cell_size_queried = false,
@@ -31,26 +29,11 @@ function M.is_remote()
   return vim.env.SSH_CLIENT ~= nil or vim.env.SSH_CONNECTION ~= nil
 end
 
----Send data to terminal using nvim_ui_send, potentially wrapping to support tmux.
+---Send data to terminal using nvim_ui_send.
+---tmux is NOT supported in this version (see README). Inside tmux, escape
+---sequences will reach tmux unwrapped and likely be garbled or eaten.
 ---@param data string
 function M.term_send(data)
-  -- If we are running inside tmux, we need to escape the terminal sequence
-  -- to have it properly pass through
-  if vim.env.TMUX ~= nil then
-    -- If tmux hasn't been configured to allow passthrough, we need to
-    -- manually do so. Only required once
-    if not M._tmux_initialized then
-      local res = vim.system({ 'tmux', 'set', '-p', 'allow-passthrough', 'all' }):wait()
-      if res.code ~= 0 then
-        error('failed to "set -p allow-passthrough all" for tmux')
-      end
-      M._tmux_initialized = true
-    end
-
-    -- Wrap our sequence with the tmux DCS passthrough code
-    data = '\027Ptmux;\027' .. string.gsub(data, '\027', '\027\027') .. '\027\\'
-  end
-
   vim.api.nvim_ui_send(data)
 end
 
