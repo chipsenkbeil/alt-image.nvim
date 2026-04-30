@@ -59,7 +59,9 @@ local function place_buffer_extmark(opts)
       virt_lines = virt,
       virt_lines_above = false,
       invalidate = true,
-      undo_restore = false,
+      -- undo_restore left at default (true) so 'u' after 'dd' brings the
+      -- image back: dd hides the mark (invalid=true), undo restores it.
+      -- get_pos checks details.invalid to treat hidden marks as off-screen.
     })
 end
 
