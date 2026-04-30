@@ -75,6 +75,7 @@ function H.fresh_provider(name)
   package.loaded['alt-image._render']   = nil
   package.loaded['alt-image._carrier']  = nil
   require('alt-image').setup({ accelerate = false })
+  pcall(function() require('alt-image._util')._reset_executable_cache() end)
   return require('alt-image.' .. name)
 end
 

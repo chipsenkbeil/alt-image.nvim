@@ -437,7 +437,19 @@ local function _run(cmd, stdin)
   local ok, res = pcall(function()
     return vim.system(cmd, { stdin = stdin, text = false }):wait()
   end)
-  if not ok or not res or res.code ~= 0 then return nil end
+  if not ok or not res or res.code ~= 0 then
+    -- Surface the subprocess error once per (tool, message) pair so the user
+    -- can diagnose ImageMagick policy errors etc. without spamming.
+    if res and res.stderr and #res.stderr > 0 then
+      vim.schedule(function()
+        vim.notify_once(
+          ('alt-image: %s failed: %s'):format(cmd[1], res.stderr),
+          vim.log.levels.DEBUG
+        )
+      end)
+    end
+    return nil
+  end
   return res.stdout
 end
 

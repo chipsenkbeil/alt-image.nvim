@@ -181,7 +181,7 @@ end
 
 ---Reset the cached executable lookups (test hook).
 function M._reset_executable_cache()
-  _executable_cache = {}
+  for k in pairs(_executable_cache) do _executable_cache[k] = nil end
 end
 
 ---Whether the libsixel `img2sixel` tool is available on $PATH.
