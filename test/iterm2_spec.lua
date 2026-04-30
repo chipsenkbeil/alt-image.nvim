@@ -45,3 +45,20 @@ describe('alt-image.iterm2 set/get/del', function()
     assert.is_nil(img.get(id))
   end)
 end)
+
+describe('alt-image.iterm2 del(math.huge)', function()
+  local img
+  before_each(function()
+    H.setup_capture()
+    package.loaded['alt-image.iterm2'] = nil
+    img = require('alt-image.iterm2')
+  end)
+
+  it('clears all placements', function()
+    local a = img.set('A', {}); local b = img.set('B', {})
+    assert.is_true(img.del(math.huge))
+    assert.is_nil(img.get(a))
+    assert.is_nil(img.get(b))
+    assert.is_false(img.del(math.huge))  -- nothing left
+  end)
+end)
