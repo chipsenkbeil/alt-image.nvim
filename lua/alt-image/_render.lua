@@ -7,18 +7,20 @@
 --   know those pixels exist, so anything that writes those cells (scroll,
 --   redraw from a carrier float's bg, etc.) overwrites the image.
 --
--- Design (modeled after PR #31399, with per-placement last_pos):
+-- Design (modeled after PR #31399, with per-placement last_positions):
 --   - One vim.uv timer at 30ms interval drives a `tick` callback.
 --   - Autocmds (broadly) mark placements as `redraw=true` (dirty flag).
 --   - On each tick:
 --       * If nothing dirty, fast no-op.
---       * Otherwise, for each dirty placement, compute current screen pos.
---         If pos differs from `last_pos`, mark `need_clear`.
+--       * Otherwise, for each dirty placement, compute current screen
+--         positions (a *list*, possibly empty). If the list differs from
+--         `last_positions`, mark `need_clear`.
 --       * Wrap in Mode 2026 synchronized output. If need_clear or a queued
 --         clear (from unregister), do `vim.cmd.mode()` to clear framebuffer.
 --       * Force TUI flush with `:redraw` to ensure any queued grid updates
 --         (text repaint, float bg) land BEFORE our image bytes.
---       * Re-emit each dirty placement at its current pos. Update last_pos.
+--       * Re-emit each dirty placement at every position in its list. Update
+--         last_positions.
 --   - All emission happens synchronously within the SYNC block.
 
 local util = require('alt-image._util')
@@ -29,12 +31,34 @@ local SYNC_START   = '\027[?2026h'
 local SYNC_END     = '\027[?2026l'
 local TICK_MS      = 30
 
--- placements[key] = { provider, id, get_pos, redraw, last_pos }
+-- placements[key] = { provider, id, get_pos, redraw, last_positions, next_positions }
+-- where last_positions / next_positions are lists of `{row, col, src}` records.
 local placements = {}
 local clear_pending = false
 local is_drawing = false
 
 local function key(provider, id) return tostring(provider) .. ':' .. tostring(id) end
+
+-- Compare two position lists for structural equality. Treats nil and empty
+-- list as equal (both mean "not visible"). Handles the new `src` rect.
+local function positions_equal(a, b)
+  if (a == nil) ~= (b == nil) then
+    -- one is nil, the other is a list. They're equal only if the list is empty.
+    local list = a or b
+    return #list == 0
+  end
+  if a == nil then return true end
+  if #a ~= #b then return false end
+  for i = 1, #a do
+    local x, y = a[i], b[i]
+    if x.row ~= y.row or x.col ~= y.col then return false end
+    local sx, sy = x.src or {}, y.src or {}
+    if sx.x ~= sy.x or sx.y ~= sy.y or sx.w ~= sy.w or sx.h ~= sy.h then
+      return false
+    end
+  end
+  return true
+end
 
 -- The core scheduler step: re-emit all dirty placements, clearing the
 -- framebuffer first if anything moved or unregistered.
@@ -51,13 +75,11 @@ local function tick()
   local initially_dirty = {}
   for _, p in pairs(placements) do
     if p.redraw then
-      local pos = p.get_pos()
-      local was_visible = p.last_pos ~= nil
-      local is_visible  = pos ~= nil
-      local moved = (was_visible ~= is_visible)
-                    or (is_visible and was_visible
-                        and (pos.row ~= p.last_pos.row or pos.col ~= p.last_pos.col))
-      if moved then need_clear = true end
+      local positions = p.get_pos() or {}
+      if not positions_equal(positions, p.last_positions) then
+        need_clear = true
+      end
+      p.next_positions = positions
       initially_dirty[#initially_dirty + 1] = p
     end
   end
@@ -83,9 +105,13 @@ local function tick()
     return a.id < b.id  -- stable tiebreak
   end)
 
-  -- Resolve current positions for the emit set.
+  -- Resolve current positions for any placement in the emit set that didn't
+  -- already have its next_positions computed in the dirty scan above (i.e.,
+  -- non-dirty placements pulled in by need_clear).
   for _, p in ipairs(emit_set) do
-    p.next_pos = p.get_pos()
+    if not p.redraw then
+      p.next_positions = p.get_pos() or {}
+    end
   end
 
   -- Emit, all inside one Mode 2026 sync block.
@@ -100,8 +126,10 @@ local function tick()
     -- output would race past SYNC_END and overwrite the image cells.
     vim.cmd('redraw')
     for _, p in ipairs(emit_set) do
-      if p.next_pos then p.provider._emit_at(p.id, p.next_pos) end
-      p.last_pos = p.next_pos
+      for _, pos in ipairs(p.next_positions or {}) do
+        p.provider._emit_at(p.id, pos)
+      end
+      p.last_positions = p.next_positions
       p.redraw = false
     end
     util.term_send(SYNC_END)
@@ -116,11 +144,11 @@ end
 
 function M.register(provider, id, get_pos)
   placements[key(provider, id)] = {
-    provider = provider,
-    id       = id,
-    get_pos  = get_pos,
-    redraw   = true,
-    last_pos = nil,
+    provider       = provider,
+    id             = id,
+    get_pos        = get_pos,
+    redraw         = true,
+    last_positions = nil,
   }
 end
 

@@ -192,12 +192,27 @@ describe('alt-image.iterm2 relative=buffer', function()
     vim.api.nvim_buf_set_lines(buf, 1, 2, false, {})
     local render = require('alt-image._render')
     render.flush()
-    -- After the delete, get_pos should return nil. last_pos transitions
-    -- nil-ward and need_clear fires. The image stops being emitted.
+    -- After the delete, get_positions should return an empty list. The
+    -- last_positions transitions to empty and need_clear fires. The image
+    -- stops being emitted.
     -- We can't easily assert the absence of further emits without complex
     -- mocking, but we can assert that get(id) still works (state retained)
     -- and that no error was thrown.
     assert.is_true(img.get(id) ~= nil)  -- placement still registered
     img.del(id)
+  end)
+
+  it('emits the image once per window showing the buffer', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'a', 'b', 'c' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('split')
+    H.reset_capture()
+    local id = img.set('PNGBYTES', { relative='buffer', buf=buf,
+                                     row=1, col=1, width=4, height=4 })
+    local cap = H.captured()
+    local _, count = string.gsub(cap, '\027%]1337;File=', '')
+    assert.equals(2, count)
+    img.del(id); vim.cmd('only')
   end)
 end)

@@ -1,12 +1,19 @@
 -- lua/alt-image/_carrier.lua
 -- Reserves screen real estate via floating windows / extmarks for placements
 -- with relative != 'ui'. Owns the float/extmark lifecycle and exposes the
--- current screen position via M.get_pos. The render coordinator (_render)
--- owns redraw scheduling and dirty-flag autocmds; the carrier just keeps
--- its windows/marks consistent and evicts dangling floats on WinClosed.
+-- current screen positions via M.get_positions. The render coordinator
+-- (_render) owns redraw scheduling and dirty-flag autocmds; the carrier just
+-- keeps its windows/marks consistent and evicts dangling floats on WinClosed.
 --
 -- Provider contract: providers must expose `_emit_at(id, screen_pos)`. The
 -- carrier itself does not call providers directly.
+--
+-- Position contract: positions are returned as a *list* of records of the
+-- shape `{ row, col, src = { x, y, w, h } }`. The list is empty (not nil)
+-- when nothing is currently visible. `src` describes the rect of the source
+-- image (in image cells) that should be rendered at (row, col); in Phase 1
+-- it always covers the full image and providers ignore it. Cropping in
+-- subsequent phases tightens `src` to clip to terminal/window bounds.
 
 local M = {}
 
@@ -16,7 +23,7 @@ local AUGROUP = vim.api.nvim_create_augroup('alt-image.carrier', { clear = true 
 -- carriers[key] = { provider = provider_module, id = provider_id,
 --                   opts = opts, kind = 'editor'|'buffer',
 --                   winid = ..., extmark_id = ..., bufnr = ...,
---                   last_pos = {row, col} }
+--                   last_positions = { {row, col, src}, ... } }
 local carriers = {}
 
 local function provider_key(provider, id)
@@ -61,44 +68,62 @@ local function place_buffer_extmark(opts)
       invalidate = true,
       -- undo_restore left at default (true) so 'u' after 'dd' brings the
       -- image back: dd hides the mark (invalid=true), undo restores it.
-      -- get_pos checks details.invalid to treat hidden marks as off-screen.
+      -- get_positions checks details.invalid to treat hidden marks as off-screen.
     })
 end
 
-local function resolve_screen_pos(c)
+local function full_src(opts)
+  return { x = 0, y = 0, w = opts.width or 1, h = opts.height or 1 }
+end
+
+-- Returns a list of screen positions where the placement is currently
+-- visible. Empty list means "nothing visible right now" (the placement may
+-- still be registered). For 'buffer' carriers, returns one entry per window
+-- showing the buffer.
+local function resolve_screen_positions(c)
   if c.kind == 'editor' then
-    if not vim.api.nvim_win_is_valid(c.winid) then return nil end
+    if not vim.api.nvim_win_is_valid(c.winid) then return {} end
     local pos = vim.api.nvim_win_get_position(c.winid)
     local pad = (c.opts and c.opts.pad) or 0
-    return { row = pos[1] + 1, col = pos[2] + 1 + pad }
+    return { {
+      row = pos[1] + 1,
+      col = pos[2] + 1 + pad,
+      src = full_src(c.opts),
+    } }
   else
-    -- relative='buffer': find a window showing this buffer; use screenpos.
-    if not vim.api.nvim_buf_is_valid(c.bufnr) then return nil end
+    -- relative='buffer': iterate ALL windows showing this buffer; use
+    -- screenpos(win, line, col) for each. One entry per visible window.
+    if not vim.api.nvim_buf_is_valid(c.bufnr) then return {} end
     local mark = vim.api.nvim_buf_get_extmark_by_id(c.bufnr, NS, c.extmark_id, { details = true })
-    if not mark or not mark[1] then return nil end
+    if not mark or not mark[1] then return {} end
     local details = mark[3]
-    if details and details.invalid then return nil end
+    if details and details.invalid then return {} end
     local line = mark[1] + 1
     local line_count = vim.api.nvim_buf_line_count(c.bufnr)
-    if line < 1 or line > line_count then return nil end
+    if line < 1 or line > line_count then return {} end
     local col  = (mark[2] or 0) + 1
     local pad = (c.opts and c.opts.pad) or 0
+    local out = {}
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
         local ok, sp = pcall(vim.fn.screenpos, win, line, col)
         if ok and sp and sp.row > 0 then
           -- The image goes in the virt_lines BELOW the anchor line, not on it.
           -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
-          return { row = sp.row + 1, col = sp.col + pad }
+          out[#out + 1] = {
+            row = sp.row + 1,
+            col = sp.col + pad,
+            src = full_src(c.opts),
+          }
         end
       end
     end
-    return nil
+    return out
   end
 end
 
 -- Register a new placement that needs a carrier.
--- Returns initial screen_pos {row, col}, or nil if offscreen.
+-- Returns the initial list of screen positions (possibly empty).
 function M.register(provider, id, opts)
   local c = { provider = provider, id = id, opts = opts }
   if opts.relative == 'editor' then
@@ -112,18 +137,19 @@ function M.register(provider, id, opts)
   else
     error('alt-image: unsupported relative ' .. tostring(opts.relative), 3)
   end
-  c.last_pos = resolve_screen_pos(c)
+  c.last_positions = resolve_screen_positions(c)
   carriers[provider_key(provider, id)] = c
-  return c.last_pos
+  return c.last_positions
 end
 
 -- Reposition the carrier for an existing placement. Called by providers when
 -- M.set(id, opts) updates row/col/width/height/etc. Without this, carriers
 -- stay where they were first opened and the resolved screen pos never moves.
+-- Returns the updated list of screen positions (possibly empty).
 function M.update(provider, id, opts)
   local key = provider_key(provider, id)
   local c = carriers[key]
-  if not c then return end
+  if not c then return {} end
   c.opts = opts
   if c.kind == 'editor' then
     if c.winid and vim.api.nvim_win_is_valid(c.winid) then
@@ -146,7 +172,8 @@ function M.update(provider, id, opts)
     if opts.buf then c.bufnr = opts.buf end
     c.extmark_id = place_buffer_extmark(opts)
   end
-  c.last_pos = resolve_screen_pos(c)
+  c.last_positions = resolve_screen_positions(c)
+  return c.last_positions
 end
 
 function M.unregister(provider, id)
@@ -162,14 +189,15 @@ function M.unregister(provider, id)
 end
 
 -- Public position lookup used by the render coordinator's get_pos closure
--- factories on the providers. Returns nil if the carrier is gone or offscreen.
-function M.get_pos(provider, id)
+-- factories on the providers. Returns a list (possibly empty) of position
+-- records `{ row, col, src = { x, y, w, h } }`. Never returns nil.
+function M.get_positions(provider, id)
   local c = carriers[provider_key(provider, id)]
-  if not c then return nil end
-  return resolve_screen_pos(c)
+  if not c then return {} end
+  return resolve_screen_positions(c)
 end
 
--- Evict dangling floats so we don't try to resolve_screen_pos against a
+-- Evict dangling floats so we don't try to resolve_screen_positions against a
 -- closed window. _render's autocmds will pick up the layout change and
 -- re-emit remaining placements at their new positions.
 vim.api.nvim_create_autocmd(

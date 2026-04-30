@@ -93,14 +93,21 @@ end
 
 -- Closure factory: produces a position resolver for placement `id` that the
 -- render coordinator can call without knowing about provider internals.
+-- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,
+-- possibly empty. Phase 1 always emits a single full-image src; cropping in
+-- later phases may shrink src or split into multiple entries.
 local function get_pos_for(id)
   return function()
     local s = state[id]
-    if not s then return nil end
+    if not s then return {} end
     if s.opts.relative == 'ui' then
-      return { row = s.opts.row or 1, col = s.opts.col or 1 }
+      return { {
+        row = s.opts.row or 1,
+        col = s.opts.col or 1,
+        src = { x = 0, y = 0, w = s.opts.width or 1, h = s.opts.height or 1 },
+      } }
     end
-    return require('alt-image._carrier').get_pos(M, id)
+    return require('alt-image._carrier').get_positions(M, id) or {}
   end
 end
 
