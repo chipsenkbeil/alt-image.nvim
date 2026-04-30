@@ -48,3 +48,28 @@ describe('alt-image.sixel set/get/del', function()
     assert.is_false(img.del(math.huge))
   end)
 end)
+
+describe('alt-image.sixel _supported', function()
+  before_each(function() package.loaded['alt-image.sixel'] = nil end)
+
+  it('returns true when TERM matches *sixel*', function()
+    H.with_env({ TERM = 'xterm-sixel' }, function()
+      assert.is_true(require('alt-image.sixel')._supported())
+    end)
+  end)
+
+  it('returns true for known terms (foot, mlterm, contour)', function()
+    for _, t in ipairs({ 'foot', 'mlterm', 'contour' }) do
+      H.with_env({ TERM = t }, function()
+        package.loaded['alt-image.sixel'] = nil
+        assert.is_true(require('alt-image.sixel')._supported())
+      end)
+    end
+  end)
+
+  it('returns false for Apple Terminal explicitly', function()
+    H.with_env({ TERM_PROGRAM = 'Apple_Terminal', TERM = 'xterm-256color' }, function()
+      assert.is_false(require('alt-image.sixel')._supported({ timeout = 10 }))
+    end)
+  end)
+end)

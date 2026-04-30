@@ -16,6 +16,10 @@ local M = {}
 local SYNC_START = '\027[?2026h'
 local SYNC_END   = '\027[?2026l'
 
+local KNOWN_SIXEL_TERMS = {
+  foot = true, mlterm = true, contour = true,
+}
+
 -- state[id] = { data = bytes, opts = canonical_opts, sixel_cache = string|nil }
 local state = {}
 local next_id = 1
@@ -100,6 +104,25 @@ function M.del(id)
   return true
 end
 
-function M._supported(_opts) return false end  -- replaced in Task 10
+function M._supported(opts)
+  opts = opts or {}
+  if vim.env.TERM_PROGRAM == 'Apple_Terminal' then
+    return false, 'Apple Terminal does not support sixel'
+  end
+  local term = vim.env.TERM or ''
+  if term:find('sixel', 1, true) or KNOWN_SIXEL_TERMS[term] then
+    return true, 'TERM=' .. term
+  end
+  -- DA1 probe (CSI c) — response includes ;4 if sixel supported.
+  local done, ok, msg = false, false, nil
+  util.query_csi('\027[c', { timeout = opts.timeout or 1000 }, function(resp)
+    if resp and resp:find(';4', 1, true) then
+      ok, msg = true, resp
+    end
+    done = true
+  end)
+  vim.wait((opts.timeout or 1000) + 100, function() return done end)
+  return ok, msg
+end
 
 return M
