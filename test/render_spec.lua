@@ -114,4 +114,20 @@ describe('alt-image._render', function()
     render.flush()
     assert.equals(before, vim.o.termsync)
   end)
+
+  it('emits placements in zindex ascending order', function()
+    local order = {}
+    local fake = {
+      _emit_at = function(id, _) order[#order + 1] = id end,
+      get      = function(id) return ({ [10] = { zindex = 5 },
+                                         [20] = { zindex = 1 },
+                                         [30] = { zindex = 3 } })[id] end,
+    }
+    render.register(fake, 10, function() return { row = 1, col = 1 } end)
+    render.register(fake, 20, function() return { row = 2, col = 2 } end)
+    render.register(fake, 30, function() return { row = 3, col = 3 } end)
+    render.flush()
+    -- Lowest zindex emits first; highest emits last (so it paints on top).
+    assert.same({ 20, 30, 10 }, order)
+  end)
 end)

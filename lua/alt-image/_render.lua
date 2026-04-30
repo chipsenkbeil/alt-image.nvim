@@ -52,11 +52,12 @@ local function tick()
   for _, p in pairs(placements) do
     if p.redraw then
       local pos = p.get_pos()
-      if pos and p.last_pos
-         and (pos.row ~= p.last_pos.row or pos.col ~= p.last_pos.col)
-      then
-        need_clear = true
-      end
+      local was_visible = p.last_pos ~= nil
+      local is_visible  = pos ~= nil
+      local moved = (was_visible ~= is_visible)
+                    or (is_visible and was_visible
+                        and (pos.row ~= p.last_pos.row or pos.col ~= p.last_pos.col))
+      if moved then need_clear = true end
       initially_dirty[#initially_dirty + 1] = p
     end
   end
@@ -71,6 +72,16 @@ local function tick()
   else
     emit_set = initially_dirty
   end
+
+  -- Sort emit_set by zindex (ascending) so higher-z emits last and paints on top.
+  table.sort(emit_set, function(a, b)
+    local ao = (a.provider.get and a.provider.get(a.id)) or {}
+    local bo = (b.provider.get and b.provider.get(b.id)) or {}
+    local az = ao.zindex or 0
+    local bz = bo.zindex or 0
+    if az ~= bz then return az < bz end
+    return a.id < b.id  -- stable tiebreak
+  end)
 
   -- Resolve current positions for the emit set.
   for _, p in ipairs(emit_set) do

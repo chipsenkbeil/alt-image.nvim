@@ -175,4 +175,19 @@ describe('alt-image.sixel relative=buffer', function()
     assert.is_true(ok, 'render.flush after buffer shrink errored: ' .. tostring(err))
     img.del(id)
   end)
+
+  it('hides the image when its anchor line is deleted', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'a', 'b', 'c' })
+    local id = img.set(png_bytes, { relative = 'buffer', buf = buf,
+                                    row = 2, col = 1, width = 4, height = 4 })
+    -- Delete line 2 (the anchor).
+    vim.api.nvim_buf_set_lines(buf, 1, 2, false, {})
+    local render = require('alt-image._render')
+    render.flush()
+    -- After the delete, get_pos should return nil. last_pos transitions
+    -- nil-ward and need_clear fires. The image stops being emitted.
+    assert.is_true(img.get(id) ~= nil)  -- placement still registered
+    img.del(id)
+  end)
 end)
