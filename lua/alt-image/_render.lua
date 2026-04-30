@@ -16,11 +16,10 @@
 --         If pos differs from `last_pos`, mark `need_clear`.
 --       * Wrap in Mode 2026 synchronized output. If need_clear or a queued
 --         clear (from unregister), do `vim.cmd.mode()` to clear framebuffer.
+--       * Force TUI flush with `:redraw` to ensure any queued grid updates
+--         (text repaint, float bg) land BEFORE our image bytes.
 --       * Re-emit each dirty placement at its current pos. Update last_pos.
---       * Defer SYNC_END by 30ms so the redraw has time to land before the
---         terminal exits sync mode.
---   - `is_drawing` re-entry guard prevents overlapping ticks during the
---     deferred SYNC_END window.
+--   - All emission happens synchronously within the SYNC block.
 
 local util = require('alt-image._util')
 
@@ -29,7 +28,6 @@ local M = {}
 local SYNC_START   = '\027[?2026h'
 local SYNC_END     = '\027[?2026l'
 local TICK_MS      = 30
-local DEFER_END_MS = 30
 
 -- placements[key] = { provider, id, get_pos, redraw, last_pos }
 local placements = {}
@@ -47,13 +45,14 @@ end
 -- The core scheduler step: re-emit all dirty placements, clearing the
 -- framebuffer first if anything moved or unregistered.
 --
--- `sync` mode (used by flush()) does the whole thing inline so callers can
--- chain emissions back-to-back. The default async mode defers SYNC_END by
--- 30ms so the terminal has time to flush the redraw before exiting sync mode.
-local function tick(sync)
+-- All emission happens synchronously within the SYNC block. vim.cmd('redraw')
+-- forces the TUI to flush any queued grid updates (text repaint, float bg)
+-- to the TTY BEFORE our image bytes, ensuring they don't race past SYNC_END
+-- and overwrite the image cells.
+local function tick()
   if is_drawing then return end
 
-  -- 1. Collect initially-dirty placements and detect any movement.
+  -- Snapshot dirty placements; detect movement.
   local need_clear = clear_pending
   local initially_dirty = {}
   for _, p in pairs(placements) do
@@ -68,30 +67,9 @@ local function tick(sync)
     end
   end
 
-  if #initially_dirty == 0 then
-    -- Idle path. If something cleared but no placements remain dirty, we
-    -- still want a clear to happen (e.g. the last placement was unregistered).
-    if clear_pending then
-      is_drawing = true
-      util.term_send(SYNC_START)
-      vim.cmd.mode()
-      if sync then
-        util.term_send(SYNC_END)
-        is_drawing = false
-        clear_pending = false
-      else
-        vim.defer_fn(function()
-          util.term_send(SYNC_END)
-          is_drawing = false
-          clear_pending = false
-        end, DEFER_END_MS)
-      end
-    end
-    return
-  end
+  if #initially_dirty == 0 and not need_clear then return end
 
-  -- 2. If clearing, expand to full registry: every placement loses its pixels
-  --    when mode() fires, so every placement must be re-emitted.
+  -- Expand to full registry if clearing.
   local emit_set
   if need_clear then
     emit_set = {}
@@ -100,37 +78,27 @@ local function tick(sync)
     emit_set = initially_dirty
   end
 
-  -- 3. Resolve current positions for the emit set.
-  local resolved = {}
+  -- Resolve current positions for the emit set.
   for _, p in ipairs(emit_set) do
-    local pos = p.get_pos()
-    resolved[p] = pos
+    p.next_pos = p.get_pos()
   end
 
+  -- Emit, all inside one Mode 2026 sync block.
   is_drawing = true
   util.term_send(SYNC_START)
-  if need_clear then
-    vim.cmd.mode()
-  end
-
-  -- 4. Emit.
+  if need_clear then vim.cmd.mode() end
+  -- Force TUI grid -> TTY flush so any queued text/float-bg paint lands
+  -- BEFORE our image bytes. Without this, the float-bg or text-repaint
+  -- output would race past SYNC_END and overwrite the image cells.
+  vim.cmd('redraw')
   for _, p in ipairs(emit_set) do
-    local pos = resolved[p]
-    if pos then p.provider._emit_at(p.id, pos) end
-    p.last_pos = pos
+    if p.next_pos then p.provider._emit_at(p.id, p.next_pos) end
+    p.last_pos = p.next_pos
     p.redraw = false
   end
-
-  local function finish()
-    util.term_send(SYNC_END)
-    is_drawing = false
-    clear_pending = false
-  end
-  if sync then
-    finish()
-  else
-    vim.defer_fn(finish, DEFER_END_MS)
-  end
+  util.term_send(SYNC_END)
+  is_drawing = false
+  clear_pending = false
 end
 
 -- Public ---------------------------------------------------------------
@@ -159,10 +127,9 @@ function M.invalidate(provider, id, also_clear)
 end
 
 -- Synchronously run a tick. Used by callers that need immediate emission
--- (e.g. set() from tests). Unlike the timer-driven path, this does not
--- defer SYNC_END by 30ms — emission completes before this returns.
+-- (e.g. set() from tests). Emission completes before this returns.
 function M.flush()
-  tick(true)
+  tick()
 end
 
 -- Timer + autocmds -----------------------------------------------------
@@ -171,7 +138,7 @@ end
 -- a usable vim.uv.new_timer (we do in normal Neovim).
 local timer = vim.uv.new_timer()
 if timer then
-  timer:start(TICK_MS, TICK_MS, vim.schedule_wrap(tick))
+  timer:start(TICK_MS, TICK_MS, vim.schedule_wrap(function() tick() end))
 end
 
 local AUGROUP = vim.api.nvim_create_augroup('alt-image.render', { clear = true })

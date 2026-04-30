@@ -78,4 +78,12 @@ describe('alt-image._render', function()
     assert.equals(2, emitted[2])
     assert.equals(2, emitted[3])
   end)
+
+  it('emits a freshly-registered placement on the first flush', function()
+    local emitted = 0
+    local fake = { _emit_at = function() emitted = emitted + 1 end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush()
+    assert.equals(1, emitted)
+  end)
 end)
