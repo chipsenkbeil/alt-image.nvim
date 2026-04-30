@@ -126,35 +126,13 @@ local function resolve_screen_positions(c)
         local win_bottom  = win_top  + vim.api.nvim_win_get_height(win) - 1
         local win_right   = win_left + vim.api.nvim_win_get_width(win)  - 1
 
-        -- Resolve the anchor's screen row, even when off-screen.
-        -- screenpos() returns row=0 when the anchor line is outside the
-        -- visible area; in that case we synthesize a virtual screen row from
-        -- the topmost visible buffer line so clipping math can crop the
-        -- image instead of dropping it entirely.
-        -- (Assumes one screen row per buffer line — wrapped lines are not
-        -- handled here, same caveat as the screenpos branch.)
-        local anchor_screen_row, anchor_screen_col
+        -- Resolve the anchor's screen position via screenpos.
+        -- When screenpos returns row=0, the anchor is off-screen; skip.
         local ok, sp = pcall(vim.fn.screenpos, win, line, col)
         if ok and sp and sp.row > 0 then
-          anchor_screen_row = sp.row
-          anchor_screen_col = sp.col
-        else
-          local topmost = vim.fn.line('w0', win)
-          if topmost and topmost > 0 and line < topmost then
-            -- Above the window: project the anchor upward.
-            local rows_above = topmost - line
-            anchor_screen_row = win_top - rows_above
-            -- For col we don't have a direct screenpos lookup; approximate
-            -- assuming no wrap and column 1 origin. Off for offset columns.
-            anchor_screen_col = win_left + (col - 1)
-          end
-          -- Below the window (or unable to resolve): leave nil → skip.
-        end
-
-        if anchor_screen_row then
           -- The image goes BELOW the anchor's row.
-          local image_anchor_row = anchor_screen_row + 1
-          local image_anchor_col = anchor_screen_col + pad
+          local image_anchor_row = sp.row + 1
+          local image_anchor_col = sp.col + pad
           local p = util.clip_to_bounds(
             image_anchor_row, image_anchor_col,
             c.opts.width or 1, c.opts.height or 1,
@@ -162,6 +140,7 @@ local function resolve_screen_positions(c)
           )
           if p then out[#out + 1] = p end
         end
+        -- else: anchor not visible in this window; no position.
       end
     end
     return out

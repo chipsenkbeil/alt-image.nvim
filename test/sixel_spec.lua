@@ -432,29 +432,19 @@ describe('alt-image.sixel relative=buffer', function()
     vim.cmd('only')
   end)
 
-  it('crops from the top when anchor scrolls above window', function()
+  it('returns empty position list when anchor scrolls above window', function()
     local buf = vim.api.nvim_create_buf(true, false)
-    -- Long buffer so we can scroll.
     local lines = {}
     for i = 1, 30 do lines[#lines+1] = 'line ' .. i end
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.api.nvim_set_current_buf(buf)
-    -- Place a 10-cell-tall image anchored to line 1.
     local id = img.set(read_fixture(), { relative='buffer', buf=buf,
-                                         row=1, col=1, width=4, height=10 })
-    -- Force the topmost visible buffer line to ~5 by putting line 5 at top.
+                                       row=1, col=1, width=4, height=10 })
     vim.cmd('5')
-    vim.cmd('normal! zt')
-    -- Get carrier positions: should still have a position with src.y > 0.
+    vim.cmd('normal! zt')   -- line 5 at top; anchor at line 1 is off-screen
     local positions = require('alt-image._carrier').get_positions(
       require('alt-image.sixel'), id)
-    assert.is_true(#positions >= 1)
-    -- Anchor was line 1, topmost is line 5, so anchor is 4 rows above the
-    -- window. The image starts at virtual_anchor + 1 = win_top - 3, so the
-    -- top 3 cells of the image are above the window → src.y == 3 and
-    -- src.h == 10 - 3 == 7.
-    assert.is_true(positions[1].src.y > 0)
-    assert.is_true(positions[1].src.h < 10)
+    assert.equals(0, #positions)
     img.del(id); vim.cmd('only')
   end)
 end)

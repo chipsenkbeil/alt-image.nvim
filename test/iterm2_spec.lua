@@ -442,7 +442,7 @@ describe('alt-image.iterm2 relative=buffer', function()
     vim.cmd('only')
   end)
 
-  it('crops from the top when anchor scrolls above window', function()
+  it('returns empty position list when anchor scrolls above window', function()
     local png_bytes = read_fixture()
     local buf = vim.api.nvim_create_buf(true, false)
     local lines = {}
@@ -452,12 +452,10 @@ describe('alt-image.iterm2 relative=buffer', function()
     local id = img.set(png_bytes, { relative='buffer', buf=buf,
                                     row=1, col=1, width=4, height=10 })
     vim.cmd('5')
-    vim.cmd('normal! zt')
+    vim.cmd('normal! zt')   -- line 5 at top; anchor at line 1 is off-screen
     local positions = require('alt-image._carrier').get_positions(
       require('alt-image.iterm2'), id)
-    assert.is_true(#positions >= 1)
-    assert.is_true(positions[1].src.y > 0)
-    assert.is_true(positions[1].src.h < 10)
+    assert.equals(0, #positions)
     img.del(id); vim.cmd('only')
   end)
 
