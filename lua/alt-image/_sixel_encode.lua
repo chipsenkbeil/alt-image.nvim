@@ -370,6 +370,35 @@ local function _encode_sixel(rgba, w, h)
   return out:get()
 end
 
+---Slice an RGBA pixel buffer to a sub-rectangle.
+---@param rgba string raw RGBA bytes (4 bytes/pixel, row-major)
+---@param full_w_px integer original width in pixels
+---@param full_h_px integer original height in pixels
+---@param x_px integer left offset (pixels) of the crop
+---@param y_px integer top offset (pixels) of the crop
+---@param w_px integer crop width (pixels)
+---@param h_px integer crop height (pixels)
+---@return string cropped_rgba, integer w_px, integer h_px
+function M.crop_rgba(rgba, full_w_px, full_h_px, x_px, y_px, w_px, h_px)
+  -- Clamp to source bounds defensively.
+  if x_px < 0 then w_px = w_px + x_px; x_px = 0 end
+  if y_px < 0 then h_px = h_px + y_px; y_px = 0 end
+  if x_px + w_px > full_w_px then w_px = full_w_px - x_px end
+  if y_px + h_px > full_h_px then h_px = full_h_px - y_px end
+  if w_px <= 0 or h_px <= 0 then return '', 0, 0 end
+
+  -- Use FFI for fast row copy.
+  local stride = full_w_px * 4
+  local out = ffi.new('uint8_t[?]', w_px * h_px * 4)
+  local src = ffi.cast('const uint8_t*', rgba)
+  for row = 0, h_px - 1 do
+    ffi.copy(out + row * w_px * 4,
+             src + (y_px + row) * stride + x_px * 4,
+             w_px * 4)
+  end
+  return ffi.string(out, w_px * h_px * 4), w_px, h_px
+end
+
 M.resize       = _resize
 M.quantize     = _quantize
 M.encode_sixel = _encode_sixel

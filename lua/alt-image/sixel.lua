@@ -22,7 +22,8 @@ local SUPPORTING_TERM_PROGRAMS = {
   ['WezTerm']   = true,
 }
 
--- state[id] = { data = bytes, opts = canonical_opts, sixel_cache = string|nil, id = id }
+-- state[id] = { data = bytes, opts = canonical_opts, sixel_cache = string|nil,
+--               sixel_cache_by_src = { [key]=string }, id = id }
 local state = {}
 local next_id = 1
 
@@ -81,12 +82,53 @@ local function build_sixel(s)
   return s.sixel_cache
 end
 
+-- Build a sixel DCS for a sub-rectangle of the source image. The src record
+-- describes the crop in image cells; we resize the full image to the placement's
+-- target pixel dims, slice out the requested sub-rectangle, and encode.
+local function build_sixel_cropped(s, src)
+  local img = png.decode(s.data)
+  local rgba, w, h = img.pixels, img.width, img.height
+  util.query_cell_size()
+  local cw, ch = util.cell_pixel_size()
+  -- Resize first to the placement's full target dims so cell-based offsets in
+  -- src translate cleanly to pixel offsets. Mirrors build_sixel's resize step.
+  if s.opts.width or s.opts.height then
+    local tw = (s.opts.width  or math.ceil(w / cw)) * cw
+    local th = (s.opts.height or math.ceil(h / ch)) * ch
+    rgba, w, h = senc.resize(rgba, w, h, tw, th)
+  end
+  local cropped, cw_px, ch_px = senc.crop_rgba(
+    rgba, w, h,
+    src.x * cw, src.y * ch, src.w * cw, src.h * ch
+  )
+  return senc.encode_sixel(cropped, cw_px, ch_px)
+end
+
 -- Public so _render can call us. Reads state[id], emits sixel DCS at screen_pos.
 function M._emit_at(id, screen_pos)
   local s = state[id]
   if not s then return end
-  local sixel = build_sixel(s)
   local opts = s.opts
+  local src = screen_pos and screen_pos.src
+  -- is_full: route to the cached full-image fast path. Guard against nil dims
+  -- so the equality check is well-defined; if dims are missing (e.g. ui mode
+  -- without explicit dims) we treat the placement as full to avoid crashing
+  -- in build_sixel_cropped on `nil * cw`.
+  local is_full = (not src)
+                  or (not opts.width) or (not opts.height)
+                  or (src.x == 0 and src.y == 0
+                      and src.w == opts.width and src.h == opts.height)
+  local sixel
+  if is_full then
+    sixel = build_sixel(s)
+  else
+    s.sixel_cache_by_src = s.sixel_cache_by_src or {}
+    local key = string.format('%d,%d,%d,%d', src.x, src.y, src.w, src.h)
+    if not s.sixel_cache_by_src[key] then
+      s.sixel_cache_by_src[key] = build_sixel_cropped(s, src)
+    end
+    sixel = s.sixel_cache_by_src[key]
+  end
   local cmove = string.format('\027[%d;%dH',
                               screen_pos and screen_pos.row or (opts.row or 1),
                               screen_pos and screen_pos.col or (opts.col or 1))
@@ -130,6 +172,7 @@ function M.set(data_or_id, opts)
     if not (opts and opts.relative) then upd.relative = s.opts.relative end
     s.opts = vim.tbl_extend('force', s.opts, upd)
     s.sixel_cache = nil  -- opts changed -> may need re-encode if size changed
+    s.sixel_cache_by_src = nil  -- crop cache also stale on opts change
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
@@ -148,7 +191,8 @@ function M.set(data_or_id, opts)
   local opts_canonical = canonicalize(opts)
   -- If non-ui and dims missing, derive from the PNG IHDR.
   derive_dims(data_or_id, opts_canonical)
-  state[id] = { data = data_or_id, opts = opts_canonical, id = id }
+  state[id] = { data = data_or_id, opts = opts_canonical, id = id,
+                sixel_cache_by_src = {} }
 
   if state[id].opts.relative ~= 'ui' then
     require('alt-image._carrier').register(M, id, state[id].opts)

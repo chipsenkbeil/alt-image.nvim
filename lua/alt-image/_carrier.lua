@@ -72,14 +72,18 @@ local function place_buffer_extmark(opts)
     })
 end
 
-local function full_src(opts)
-  return { x = 0, y = 0, w = opts.width or 1, h = opts.height or 1 }
-end
-
 -- Returns a list of screen positions where the placement is currently
 -- visible. Empty list means "nothing visible right now" (the placement may
 -- still be registered). For 'buffer' carriers, returns one entry per window
 -- showing the buffer.
+--
+-- For 'buffer' kind, the image footprint is clipped against each window's
+-- inner bounds: `src` describes the visible sub-rectangle of the source image
+-- (in image cells), and (row, col) is the upper-left of the visible portion
+-- on the terminal grid. Providers re-encode at the cropped dims.
+--
+-- For 'editor' kind, bounds remain permissive in Phase 2 (`src` is full image);
+-- editor-mode clipping is a future refinement.
 local function resolve_screen_positions(c)
   if c.kind == 'editor' then
     if not vim.api.nvim_win_is_valid(c.winid) then return {} end
@@ -88,11 +92,12 @@ local function resolve_screen_positions(c)
     return { {
       row = pos[1] + 1,
       col = pos[2] + 1 + pad,
-      src = full_src(c.opts),
+      src = { x = 0, y = 0, w = c.opts.width or 1, h = c.opts.height or 1 },
     } }
   else
     -- relative='buffer': iterate ALL windows showing this buffer; use
-    -- screenpos(win, line, col) for each. One entry per visible window.
+    -- screenpos(win, line, col) for each. One entry per visible window,
+    -- clipped to that window's inner bounds.
     if not vim.api.nvim_buf_is_valid(c.bufnr) then return {} end
     local mark = vim.api.nvim_buf_get_extmark_by_id(c.bufnr, NS, c.extmark_id, { details = true })
     if not mark or not mark[1] then return {} end
@@ -108,13 +113,39 @@ local function resolve_screen_positions(c)
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
         local ok, sp = pcall(vim.fn.screenpos, win, line, col)
         if ok and sp and sp.row > 0 then
+          -- Image's intended footprint (1-indexed terminal cells).
           -- The image goes in the virt_lines BELOW the anchor line, not on it.
           -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
-          out[#out + 1] = {
-            row = sp.row + 1,
-            col = sp.col + pad,
-            src = full_src(c.opts),
-          }
+          local image_top    = sp.row + 1
+          local image_left   = sp.col + pad
+          local image_bottom = image_top  + (c.opts.height or 1) - 1
+          local image_right  = image_left + (c.opts.width  or 1) - 1
+
+          -- Window inner bounds (1-indexed terminal cells).
+          local wpos        = vim.api.nvim_win_get_position(win)
+          local win_top     = wpos[1] + 1
+          local win_left    = wpos[2] + 1
+          local win_bottom  = win_top  + vim.api.nvim_win_get_height(win) - 1
+          local win_right   = win_left + vim.api.nvim_win_get_width(win)  - 1
+
+          -- Clip to bounds.
+          local v_top    = math.max(image_top,    win_top)
+          local v_bottom = math.min(image_bottom, win_bottom)
+          local v_left   = math.max(image_left,   win_left)
+          local v_right  = math.min(image_right,  win_right)
+
+          if v_top <= v_bottom and v_left <= v_right then
+            out[#out + 1] = {
+              row = v_top,
+              col = v_left,
+              src = {
+                x = v_left - image_left,
+                y = v_top  - image_top,
+                w = v_right  - v_left + 1,
+                h = v_bottom - v_top  + 1,
+              },
+            }
+          end
         end
       end
     end

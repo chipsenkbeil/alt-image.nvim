@@ -233,4 +233,30 @@ describe('alt-image.sixel relative=buffer', function()
     assert.equals(2, count)
     img.del(id); vim.cmd('only')
   end)
+
+  it('returns cropped src when image extends past window bottom', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    -- Force a small window height so the image footprint exceeds it.
+    vim.cmd('resize 3')
+    local id = img.set(read_fixture(), { relative='buffer', buf=buf,
+                                         row=1, col=1, width=4, height=10 })
+    local carrier = require('alt-image._carrier')
+    local sixel_mod = require('alt-image.sixel')
+    local positions = carrier.get_positions(sixel_mod, id)
+    assert.is_true(#positions >= 1)
+    local pos = positions[1]
+    -- The image is 10 cells tall but the window is much smaller; src.h must
+    -- be < 10 to reflect clipping against the window's inner bounds.
+    assert.is_true(pos.src.h < 10,
+      'expected src.h < 10 (cropped), got ' .. tostring(pos.src.h))
+    -- Width should still match (the window is wide enough).
+    assert.equals(4, pos.src.w)
+    -- Crop offset: the visible portion starts at the top of the image.
+    assert.equals(0, pos.src.x)
+    assert.equals(0, pos.src.y)
+    img.del(id)
+    vim.cmd('resize')  -- restore default
+  end)
 end)
