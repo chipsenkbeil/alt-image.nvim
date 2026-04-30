@@ -75,6 +75,76 @@ describe('alt-image.iterm2 set/get/del', function()
     end)
     img.del(id)
   end)
+
+  it('pre-resizes the PNG to cell-pixel dimensions for sharp rendering', function()
+    H.reset_capture()
+    local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
+    local cap = H.captured()
+    local seq = cap:match('\027%]1337;File=[^\007]*\007')
+    assert.is_true(seq ~= nil, 'expected an OSC 1337 sequence in capture')
+    local r = H.parse_iterm2_seq(seq)
+    local data = vim.base64.decode(r.payload)
+    local png = require('alt-image._png')
+    local decoded = png.decode(data)
+    local util = require('alt-image._util')
+    local cw, ch = util.cell_pixel_size()
+    -- The decoded PNG dimensions should match the cell-pixel area exactly,
+    -- not the original 4x4 source size.
+    assert.equals(4 * cw, decoded.width)
+    assert.equals(4 * ch, decoded.height)
+    img.del(id)
+  end)
+end)
+
+describe('alt-image.iterm2 relative=ui clipping', function()
+  local img
+  before_each(function()
+    H.setup_capture()
+    img = H.fresh_provider('iterm2')
+  end)
+
+  it('clips relative=ui image at terminal right edge', function()
+    local png_bytes = read_fixture()
+    local cols = vim.o.columns
+    -- Anchor at the rightmost column with width=4 → only 1 column visible.
+    H.reset_capture()
+    local id = img.set(png_bytes, { row = 1, col = cols, width = 4, height = 4 })
+    local cap = H.captured()
+    local seq = cap:match('\027%]1337;File=[^\007]*\007')
+    assert.is_true(seq ~= nil, 'expected an OSC 1337 sequence in capture')
+    local r = H.parse_iterm2_seq(seq)
+    -- The visible width is 1 (1 column at the right edge of the screen).
+    assert.equals('1', r.args.width)
+    assert.equals('4', r.args.height)
+    img.del(id)
+  end)
+
+  it('clips relative=ui image at terminal bottom edge', function()
+    local png_bytes = read_fixture()
+    local lines = vim.o.lines
+    H.reset_capture()
+    local id = img.set(png_bytes, { row = lines, col = 1, width = 4, height = 4 })
+    local cap = H.captured()
+    local seq = cap:match('\027%]1337;File=[^\007]*\007')
+    assert.is_true(seq ~= nil, 'expected an OSC 1337 sequence in capture')
+    local r = H.parse_iterm2_seq(seq)
+    -- The visible height is 1 (1 row at the bottom of the screen).
+    assert.equals('4', r.args.width)
+    assert.equals('1', r.args.height)
+    img.del(id)
+  end)
+
+  it('emits nothing when relative=ui image is entirely off-screen', function()
+    local png_bytes = read_fixture()
+    H.reset_capture()
+    -- Anchor far past the bottom-right corner.
+    local id = img.set(png_bytes, { row = vim.o.lines + 10, col = vim.o.columns + 10,
+                                    width = 4, height = 4 })
+    local cap = H.captured()
+    -- No OSC 1337 sequence should be emitted for an off-screen placement.
+    assert.is_nil(cap:match('\027%]1337;File='))
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.iterm2 del(math.huge)', function()

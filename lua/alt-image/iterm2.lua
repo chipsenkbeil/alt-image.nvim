@@ -69,53 +69,62 @@ local function derive_dims(data, opts)
   opts.height = opts.height or math.ceil(px_h / cell_h)
 end
 
----Decode the source PNG to RGBA once and cache on the placement state.
----Unlike sixel, we don't resize: iTerm2's protocol scales via the width=N/
----height=M cell args itself. We only need the original RGBA for cropping.
+---Decode the source PNG to RGBA, resize via nearest-neighbor to the cell-pixel
+---area requested by opts.width/opts.height, and cache the result. Mirrors
+---sixel.lua's ensure_resized so iTerm2 receives a 1:1 pixel mapping (image
+---dims == cell area in pixels) and renders sharply instead of relying on the
+---terminal's smooth scaling.
 ---@param s table placement state
 ---@return string rgba, integer w, integer h
-local function ensure_decoded(s)
-  if s.decoded_rgba then return s.decoded_rgba, s.decoded_w, s.decoded_h end
+local function ensure_resized(s)
+  if s.resized_rgba then return s.resized_rgba, s.resized_w, s.resized_h end
+  util.query_cell_size()
   local img = png.decode(s.data)
-  s.decoded_rgba, s.decoded_w, s.decoded_h = img.pixels, img.width, img.height
-  return s.decoded_rgba, s.decoded_w, s.decoded_h
+  local rgba, w, h = img.pixels, img.width, img.height
+  local cw, ch = util.cell_pixel_size()
+  if s.opts.width or s.opts.height then
+    local target_w = (s.opts.width  or math.ceil(img.width  / cw)) * cw
+    local target_h = (s.opts.height or math.ceil(img.height / ch)) * ch
+    rgba, w, h = senc.resize(rgba, img.width, img.height, target_w, target_h)
+  end
+  s.resized_rgba, s.resized_w, s.resized_h = rgba, w, h
+  return rgba, w, h
 end
 
----Crop the source image to a sub-rectangle and re-encode as PNG.
+---Encode the resized RGBA buffer back to PNG once and cache it. This is the
+---data we send via OSC 1337 for the full-image fast path; the terminal sees
+---image pixel dims that match the cell-pixel area exactly, so its built-in
+---scaling becomes a no-op.
+---@param s table placement state
+---@return string png_bytes
+local function ensure_full_png(s)
+  if s.full_png then return s.full_png end
+  local rgba, w, h = ensure_resized(s)
+  s.full_png = png_encode.encode(rgba, w, h)
+  return s.full_png
+end
+
+---Crop a sub-rectangle of the resized PNG and re-encode as PNG.
 ---@param s table placement state
 ---@param src table { x, y, w, h } in cell units
 ---@return string png_bytes, integer cw_px, integer ch_px
 local function build_png_cropped(s, src)
   util.query_cell_size()
-  local rgba, w, h = ensure_decoded(s)
   local cw, ch = util.cell_pixel_size()
-  -- Map cell-unit src -> pixel-unit crop. The image's pixel dimensions are the
-  -- decoded dims; we approximate "the image as it would render at opts.width
-  -- x opts.height cells" by mapping a fraction of the source. This mirrors
-  -- the sixel path's intent: crop in image-cell space.
-  local opts = s.opts
-  local full_w_cells = opts.width  or math.ceil(w / cw)
-  local full_h_cells = opts.height or math.ceil(h / ch)
-  -- Convert cell coords in target render to source pixel coords.
-  local px_per_cell_x = w / full_w_cells
-  local px_per_cell_y = h / full_h_cells
-  local x_px = math.floor(src.x * px_per_cell_x + 0.5)
-  local y_px = math.floor(src.y * px_per_cell_y + 0.5)
-  local w_px = math.floor(src.w * px_per_cell_x + 0.5)
-  local h_px = math.floor(src.h * px_per_cell_y + 0.5)
-  if w_px < 1 then w_px = 1 end
-  if h_px < 1 then h_px = 1 end
-  -- Fast path: if convert is available and accel is on, do crop + PNG
-  -- re-encode in a single subprocess call. Falls back to pure Lua on nil.
-  if util.is_png_data(s.data) then
-    local accel = senc.crop_and_encode_png(s.data, x_px, y_px, w_px, h_px)
-    if accel and #accel > 0 then
-      -- Returned PNG dims may differ slightly due to clamping in convert;
-      -- the caller only cares about the resulting cell counts (src.w/h).
-      return accel, w_px, h_px
-    end
+  local x_px = src.x * cw
+  local y_px = src.y * ch
+  local w_px = src.w * cw
+  local h_px = src.h * ch
+  -- Fast path: crop + PNG re-encode via `convert` on the resized PNG bytes.
+  -- We feed the *resized* PNG (not the original) so the accelerated path
+  -- crops the same image data the pure-Lua fallback would.
+  local resized_png = ensure_full_png(s)
+  local accel = senc.crop_and_encode_png(resized_png, x_px, y_px, w_px, h_px)
+  if accel and #accel > 0 then
+    return accel, w_px, h_px
   end
-  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
+  local rgba, full_w, full_h = ensure_resized(s)
+  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, full_w, full_h, x_px, y_px, w_px, h_px)
   return png_encode.encode(cropped, cw_px, ch_px), cw_px, ch_px
 end
 
@@ -147,7 +156,11 @@ function M._emit_at(id, screen_pos)
                       and src.w == opts.width and src.h == opts.height)
   local data, width_cells, height_cells
   if is_full then
-    data = s.data
+    -- Pre-resize to the cell-pixel area via nearest-neighbor before sending,
+    -- so iTerm2's scaler sees a 1:1 mapping (sharp output). We fall back to
+    -- the original bytes when the source isn't decodable PNG (defensive).
+    local ok, resized_png = pcall(ensure_full_png, s)
+    data = (ok and resized_png) or s.data
     width_cells, height_cells = opts.width, opts.height
   else
     local key = string.format('%d,%d,%d,%d', src.x, src.y, src.w, src.h)
@@ -195,11 +208,12 @@ local function get_pos_for(id)
     local s = state[id]
     if not s then return {} end
     if s.opts.relative == 'ui' then
-      return { {
-        row = s.opts.row or 1,
-        col = s.opts.col or 1,
-        src = { x = 0, y = 0, w = s.opts.width or 1, h = s.opts.height or 1 },
-      } }
+      local p = util.clip_to_bounds(
+        s.opts.row or 1, s.opts.col or 1,
+        s.opts.width or 1, s.opts.height or 1,
+        1, 1, vim.o.lines, vim.o.columns
+      )
+      return p and { p } or {}
     end
     return require('alt-image._carrier').get_positions(M, id) or {}
   end
@@ -227,13 +241,14 @@ function M.set(data_or_id, opts)
         s.opts.relative, opts.relative), 2)
     end
     s.opts = vim.tbl_extend('force', s.opts, upd)
-    -- opts changed -> any cached crop may be stale; drop the LRU and decoded
-    -- buffer (the latter only matters if data ever changed, but cheap to drop).
+    -- opts changed -> any cached crop, resized buffer, or full-image PNG may
+    -- be stale (width/height changes invalidate the cell-pixel resize).
     s.png_cache_by_src = nil
     s.png_cache_by_src_order = nil
-    s.decoded_rgba = nil
-    s.decoded_w = nil
-    s.decoded_h = nil
+    s.resized_rgba = nil
+    s.resized_w = nil
+    s.resized_h = nil
+    s.full_png = nil
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
     -- For carrier-managed placements, reposition the carrier so the resolved

@@ -177,11 +177,12 @@ local function get_pos_for(id)
     local s = state[id]
     if not s then return {} end
     if s.opts.relative == 'ui' then
-      return { {
-        row = s.opts.row or 1,
-        col = s.opts.col or 1,
-        src = { x = 0, y = 0, w = s.opts.width or 1, h = s.opts.height or 1 },
-      } }
+      local p = util.clip_to_bounds(
+        s.opts.row or 1, s.opts.col or 1,
+        s.opts.width or 1, s.opts.height or 1,
+        1, 1, vim.o.lines, vim.o.columns
+      )
+      return p and { p } or {}
     end
     return require('alt-image._carrier').get_positions(M, id) or {}
   end

@@ -67,6 +67,70 @@ describe('_util.png_dimensions', function()
   end)
 end)
 
+describe('_util.clip_to_bounds', function()
+  local util = require('alt-image._util')
+
+  it('image fully inside bounds → src covers full image', function()
+    local p = util.clip_to_bounds(5, 5, 4, 4, 1, 1, 24, 80)
+    assert.is_not_nil(p)
+    assert.equals(5, p.row)
+    assert.equals(5, p.col)
+    assert.equals(0, p.src.x)
+    assert.equals(0, p.src.y)
+    assert.equals(4, p.src.w)
+    assert.equals(4, p.src.h)
+  end)
+
+  it('image extends past right → src.w shrinks, src.x = 0', function()
+    -- Image 4x4 anchored at col=78 in 80-col terminal → only 3 cols visible.
+    local p = util.clip_to_bounds(1, 78, 4, 4, 1, 1, 24, 80)
+    assert.is_not_nil(p)
+    assert.equals(0, p.src.x)
+    assert.equals(0, p.src.y)
+    assert.equals(3, p.src.w)
+    assert.equals(4, p.src.h)
+  end)
+
+  it('image extends past bottom → src.h shrinks, src.y = 0', function()
+    -- Image 4x4 anchored at row=22 in 24-row terminal → only 3 rows visible.
+    local p = util.clip_to_bounds(22, 1, 4, 4, 1, 1, 24, 80)
+    assert.is_not_nil(p)
+    assert.equals(0, p.src.x)
+    assert.equals(0, p.src.y)
+    assert.equals(4, p.src.w)
+    assert.equals(3, p.src.h)
+  end)
+
+  it('image extends past top → src.y > 0, src.h reduced', function()
+    -- Image 4x4 anchored at row=-1 (above bounds top=1).
+    local p = util.clip_to_bounds(-1, 1, 4, 4, 1, 1, 24, 80)
+    assert.is_not_nil(p)
+    assert.equals(1, p.row)
+    assert.equals(2, p.src.y)  -- 2 rows of image are above the bound
+    assert.equals(0, p.src.x)
+    assert.equals(4, p.src.w)
+    assert.equals(2, p.src.h)
+  end)
+
+  it('image extends past left → src.x > 0, src.w reduced', function()
+    -- Image 4x4 anchored at col=-1 (left of bounds left=1).
+    local p = util.clip_to_bounds(1, -1, 4, 4, 1, 1, 24, 80)
+    assert.is_not_nil(p)
+    assert.equals(1, p.col)
+    assert.equals(2, p.src.x)  -- 2 cols of image are left of the bound
+    assert.equals(0, p.src.y)
+    assert.equals(2, p.src.w)
+    assert.equals(4, p.src.h)
+  end)
+
+  it('image entirely outside bounds → returns nil', function()
+    -- Anchored well past the bottom-right corner.
+    assert.is_nil(util.clip_to_bounds(100, 100, 4, 4, 1, 1, 24, 80))
+    -- Anchored well above the top.
+    assert.is_nil(util.clip_to_bounds(-10, 1, 4, 4, 1, 1, 24, 80))
+  end)
+end)
+
 describe('_sixel_encode', function()
   it('encodes a 4x4 solid-red RGBA buffer to a DCS sequence', function()
     -- 4x4 fully opaque red

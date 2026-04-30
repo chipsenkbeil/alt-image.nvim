@@ -57,6 +57,40 @@ describe('alt-image.sixel set/get/del', function()
   end)
 end)
 
+describe('alt-image.sixel relative=ui clipping', function()
+  local img, png_bytes
+  before_each(function()
+    H.setup_capture()
+    img = H.fresh_provider('sixel')
+    png_bytes = read_fixture()
+  end)
+
+  it('clips relative=ui image at terminal right edge', function()
+    local cols = vim.o.columns
+    H.reset_capture()
+    local id = img.set(png_bytes, { row = 1, col = cols, width = 4, height = 4 })
+    local raw = H.captured():match('\027P[^\027]*\027\\')
+    assert.is_true(raw ~= nil, 'expected a sixel DCS sequence in capture')
+    local r = H.parse_sixel_seq(raw)
+    -- Sixel raster width should reflect the clipped cell width (1 col visible)
+    -- multiplied by cell pixel width. With default cell width 8, full would be
+    -- 32 px (4 cells); clipped to 1 col yields 8 px.
+    local util = require('alt-image._util')
+    local cw = ({ util.cell_pixel_size() })[1]
+    assert.equals(1 * cw, r.raster.w)
+    img.del(id)
+  end)
+
+  it('emits nothing when relative=ui image is entirely off-screen', function()
+    H.reset_capture()
+    local id = img.set(png_bytes, { row = vim.o.lines + 10, col = vim.o.columns + 10,
+                                    width = 4, height = 4 })
+    local cap = H.captured()
+    assert.is_nil(cap:match('\027P'))
+    img.del(id)
+  end)
+end)
+
 describe('alt-image.sixel _supported', function()
   before_each(function() package.loaded['alt-image.sixel'] = nil end)
 

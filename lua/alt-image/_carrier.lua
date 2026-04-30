@@ -17,6 +17,8 @@
 -- the carrier tightens src to the visible sub-rect and providers crop +
 -- re-encode before emitting.
 
+local util = require('alt-image._util')
+
 local M = {}
 
 local NS = vim.api.nvim_create_namespace('alt-image.carrier')
@@ -91,11 +93,15 @@ local function resolve_screen_positions(c)
     if not vim.api.nvim_win_is_valid(c.winid) then return {} end
     local pos = vim.api.nvim_win_get_position(c.winid)
     local pad = (c.opts and c.opts.pad) or 0
-    return { {
-      row = pos[1] + 1,
-      col = pos[2] + 1 + pad,
-      src = { x = 0, y = 0, w = c.opts.width or 1, h = c.opts.height or 1 },
-    } }
+    local anchor_row = pos[1] + 1
+    local anchor_col = pos[2] + 1 + pad
+    local w = c.opts.width or 1
+    local h = c.opts.height or 1
+    local p = util.clip_to_bounds(
+      anchor_row, anchor_col, w, h,
+      1, 1, vim.o.lines, vim.o.columns
+    )
+    return p and { p } or {}
   else
     -- relative='buffer': iterate ALL windows showing this buffer; use
     -- screenpos(win, line, col) for each. One entry per visible window,
