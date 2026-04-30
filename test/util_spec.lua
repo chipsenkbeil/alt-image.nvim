@@ -21,3 +21,17 @@ describe('_util', function()
     rawset(vim, 'tty', saved)
   end)
 end)
+
+describe('_png', function()
+  local png = require('alt-image._png')
+
+  it('decodes the 4x4 fixture', function()
+    local f = assert(io.open('test/fixtures/4x4.png', 'rb'))
+    local bytes = f:read('*a'); f:close()
+    local img = png.decode(bytes)
+    assert.equals(4, img.width)
+    assert.equals(4, img.height)
+    -- 16 pixels x 4 bytes (RGBA) = 64 bytes of pixel data
+    assert.equals(16 * 4, #img.pixels)
+  end)
+end)
