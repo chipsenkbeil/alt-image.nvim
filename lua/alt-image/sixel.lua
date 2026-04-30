@@ -113,7 +113,9 @@ function M.set(data_or_id, opts)
     if s.opts.relative ~= 'ui' then
       require('alt-image._carrier').update(M, data_or_id, s.opts)
     end
-    render.rerender_all()
+    -- Mark dirty AND queue a clear, since the position likely moved.
+    render.invalidate(M, data_or_id, true)
+    render.flush()
     return data_or_id
   end
 
@@ -126,7 +128,8 @@ function M.set(data_or_id, opts)
   end
 
   render.register(M, id, get_pos_for(id))
-  render.refresh()
+  -- Synchronous initial paint so callers (and tests) see the image immediately.
+  render.flush()
   return id
 end
 
@@ -144,14 +147,14 @@ function M.del(id)
       render.unregister(M, k)
     end
     state = {}
-    if any then render.rerender_all() end
+    if any then render.flush() end
     return any
   end
   if not state[id] then return false end
   require('alt-image._carrier').unregister(M, id)
   render.unregister(M, id)
   state[id] = nil
-  render.rerender_all()
+  render.flush()
   return true
 end
 

@@ -1,11 +1,12 @@
 -- lua/alt-image/_carrier.lua
 -- Reserves screen real estate via floating windows / extmarks for placements
--- with relative != 'ui'. Layout-change autocmds delegate to the render
--- coordinator, which handles the synchronized clear+redraw across all
--- placements (carrier-tracked or not).
+-- with relative != 'ui'. Owns the float/extmark lifecycle and exposes the
+-- current screen position via M.get_pos. The render coordinator (_render)
+-- owns redraw scheduling and dirty-flag autocmds; the carrier just keeps
+-- its windows/marks consistent and evicts dangling floats on WinClosed.
 --
 -- Provider contract: providers must expose `_emit_at(id, screen_pos)`. The
--- carrier itself does not call providers directly anymore.
+-- carrier itself does not call providers directly.
 
 local M = {}
 
@@ -152,27 +153,9 @@ function M.get_pos(provider, id)
   return resolve_screen_pos(c)
 end
 
-local function refresh_all()
-  -- Layout changed; positions may have changed. Let _render do the synchronized
-  -- redraw across all placements (it knows about both carrier-backed ones and
-  -- relative='ui' ones, so re-emitting them all keeps the framebuffer correct).
-  if next(carriers) == nil then return end
-  require('alt-image._render').rerender_all()
-end
-
--- Single debounced refresh: a burst of layout events => one redraw.
-local pending = false
-local function schedule_refresh()
-  if pending then return end
-  pending = true
-  vim.schedule(function() pending = false; refresh_all() end)
-end
-
-vim.api.nvim_create_autocmd(
-  { 'WinScrolled', 'WinResized', 'VimResized', 'BufWinEnter', 'TabEnter' },
-  { group = AUGROUP, callback = schedule_refresh }
-)
-
+-- Evict dangling floats so we don't try to resolve_screen_pos against a
+-- closed window. _render's autocmds will pick up the layout change and
+-- re-emit remaining placements at their new positions.
 vim.api.nvim_create_autocmd(
   { 'WinClosed' },
   {

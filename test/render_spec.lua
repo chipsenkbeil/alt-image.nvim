@@ -1,38 +1,60 @@
 local H = require('test.helpers')
 
 describe('alt-image._render', function()
+  local render
+
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image._render'] = nil
+    render = require('alt-image._render')
   end)
 
-  it('refresh is a no-op when no placements registered', function()
-    local r = require('alt-image._render')
-    r.refresh()
-    assert.equals('', H.captured())
+  it('register + flush emits via provider._emit_at', function()
+    local emitted = {}
+    local fake = {
+      _emit_at = function(id, pos) emitted[#emitted + 1] = { id = id, pos = pos } end,
+    }
+    render.register(fake, 1, function() return { row = 5, col = 10 } end)
+    render.flush()
+    assert.equals(1, #emitted)
+    assert.equals(5, emitted[1].pos.row)
+    assert.equals(10, emitted[1].pos.col)
   end)
 
-  it('rerender_all emits SYNC_START and SYNC_END even when registry is empty', function()
-    -- This is intentional: del() unregisters placements, then calls
-    -- rerender_all() to clear leftover pixels. So the sync wrappers must
-    -- still fire on an empty registry.
-    local r = require('alt-image._render')
-    r.rerender_all()
-    local cap = H.captured()
-    assert.matches('\027%[%?2026h', cap)
-    assert.matches('\027%[%?2026l', cap)
+  it('flush is a no-op when nothing is dirty', function()
+    local emitted = 0
+    local fake = { _emit_at = function() emitted = emitted + 1 end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush()             -- emits once (initial)
+    assert.equals(1, emitted)
+    render.flush()             -- no dirty placements, no-op
+    assert.equals(1, emitted)
   end)
 
-  it('register and unregister manage the placement registry', function()
-    local r = require('alt-image._render')
-    local emitted = false
-    local fake_provider = { _emit_at = function() emitted = true end }
-    r.register(fake_provider, 1, function() return { row = 1, col = 1 } end)
-    r.refresh()
-    assert.is_true(emitted)
-    r.unregister(fake_provider, 1)
-    emitted = false
-    r.refresh()
-    assert.is_false(emitted)
+  it('invalidate marks the placement dirty for the next flush', function()
+    local emitted = 0
+    local fake = { _emit_at = function() emitted = emitted + 1 end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush(); assert.equals(1, emitted)
+    render.invalidate(fake, 1)
+    render.flush(); assert.equals(2, emitted)
+  end)
+
+  it('unregister stops emitting that placement', function()
+    local emitted = 0
+    local fake = { _emit_at = function() emitted = emitted + 1 end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush()
+    render.unregister(fake, 1)
+    render.invalidate(fake, 1)  -- harmless on missing placement
+    render.flush()
+    assert.equals(1, emitted)   -- only the initial
+  end)
+
+  it('SYNC_START is emitted at the start of a non-empty tick', function()
+    local fake = { _emit_at = function() end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush()
+    assert.matches('\027%[%?2026h', H.captured())
   end)
 end)
