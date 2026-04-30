@@ -11,6 +11,8 @@ describe('alt-image.sixel set/get/del', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.sixel'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.sixel')
     png_bytes = read_fixture()
   end)
@@ -79,6 +81,8 @@ describe('alt-image.sixel relative=editor', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.sixel'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.sixel')
     png_bytes = read_fixture()
   end)
@@ -99,6 +103,8 @@ describe('alt-image.sixel relative=buffer', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.sixel'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.sixel')
     png_bytes = read_fixture()
   end)

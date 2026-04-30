@@ -5,6 +5,8 @@ describe('alt-image.iterm2 set/get/del', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.iterm2'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.iterm2')
   end)
 
@@ -51,6 +53,8 @@ describe('alt-image.iterm2 del(math.huge)', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.iterm2'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.iterm2')
   end)
 
@@ -96,6 +100,8 @@ describe('alt-image.iterm2 relative=editor', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.iterm2'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.iterm2')
   end)
 
@@ -115,6 +121,8 @@ describe('alt-image.iterm2 relative=buffer', function()
   before_each(function()
     H.setup_capture()
     package.loaded['alt-image.iterm2'] = nil
+    package.loaded['alt-image._render'] = nil
+    package.loaded['alt-image._carrier'] = nil
     img = require('alt-image.iterm2')
   end)
 
