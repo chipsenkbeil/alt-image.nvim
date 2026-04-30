@@ -13,6 +13,39 @@ describe('alt-image.iterm2 set/get/del', function()
     img = H.fresh_provider('iterm2')
   end)
 
+  it('preserves encoding cache across position-only updates', function()
+    local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
+    -- Force the resize+encode cache to populate.
+    local render = require('alt-image._render')
+    render.flush()
+    local s = require('alt-image.iterm2')._state[id]
+    assert.is_true(s ~= nil)
+    local before_resized = s.resized_rgba
+    assert.is_true(before_resized ~= nil, 'resized_rgba should be cached after flush')
+    -- Position-only update.
+    img.set(id, { row = 5, col = 5 })
+    render.flush()
+    local after_resized = s.resized_rgba
+    -- Cache should be the SAME object (not invalidated and rebuilt).
+    assert.is_true(before_resized == after_resized)
+    img.del(id)
+  end)
+
+  it('invalidates encoding cache when dims change', function()
+    local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
+    require('alt-image._render').flush()
+    local s = require('alt-image.iterm2')._state[id]
+    assert.is_true(s ~= nil)
+    local before = s.resized_rgba
+    assert.is_true(before ~= nil)
+    img.set(id, { width = 8, height = 8 })
+    require('alt-image._render').flush()
+    local after = s.resized_rgba
+    -- Cache should be different (invalidated, rebuilt).
+    assert.is_true(before ~= after)
+    img.del(id)
+  end)
+
   it('set returns an id and emits an OSC 1337 sequence', function()
     local id = img.set('PNGBYTES', { row = 1, col = 1, width = 4, height = 4 })
     assert.is_true(type(id) == 'number')

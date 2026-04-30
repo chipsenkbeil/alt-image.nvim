@@ -240,17 +240,21 @@ function M.set(data_or_id, opts)
         'alt-image.iterm2: cannot change relative on update (was %s, got %s); del and re-create instead',
         s.opts.relative, opts.relative), 2)
     end
+    -- Capture old dimensions BEFORE merge so we can detect if they actually changed.
+    local old_w, old_h = s.opts.width, s.opts.height
     s.opts = vim.tbl_extend('force', s.opts, upd)
-    -- opts changed -> any cached crop, resized buffer, or full-image PNG may
-    -- be stale (width/height changes invalidate the cell-pixel resize).
-    s.png_cache_by_src = nil
-    s.png_cache_by_src_order = nil
-    s.resized_rgba = nil
-    s.resized_w = nil
-    s.resized_h = nil
-    s.full_png = nil
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
+    -- Only invalidate encoding caches when dimensions actually changed.
+    -- Position, row/col, zindex, pad, relative (ui-mode only) don't affect encoding.
+    if s.opts.width ~= old_w or s.opts.height ~= old_h then
+      s.png_cache_by_src = nil
+      s.png_cache_by_src_order = nil
+      s.resized_rgba = nil
+      s.resized_w = nil
+      s.resized_h = nil
+      s.full_png = nil
+    end
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
     if s.opts.relative ~= 'ui' then
@@ -328,5 +332,8 @@ function M._supported(opts)
   end
   return ok, msg
 end
+
+-- Expose state for testing only.
+M._state = state
 
 return M

@@ -208,15 +208,21 @@ function M.set(data_or_id, opts)
         'alt-image.sixel: cannot change relative on update (was %s, got %s); del and re-create instead',
         s.opts.relative, opts.relative), 2)
     end
+    -- Capture old dimensions BEFORE merge so we can detect if they actually changed.
+    local old_w, old_h = s.opts.width, s.opts.height
     s.opts = vim.tbl_extend('force', s.opts, upd)
-    s.sixel_cache = nil  -- opts changed -> may need re-encode if size changed
-    s.sixel_cache_by_src = nil  -- crop cache also stale on opts change
-    s.sixel_cache_by_src_order = nil
-    s.resized_rgba = nil  -- width/height change invalidates cached resize
-    s.resized_w = nil
-    s.resized_h = nil
     -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
     derive_dims(s.data, s.opts)
+    -- Only invalidate encoding caches when dimensions actually changed.
+    -- Position, row/col, zindex, pad, relative (ui-mode only) don't affect encoding.
+    if s.opts.width ~= old_w or s.opts.height ~= old_h then
+      s.sixel_cache = nil  -- dims changed -> may need re-encode
+      s.sixel_cache_by_src = nil  -- crop cache also stale on size change
+      s.sixel_cache_by_src_order = nil
+      s.resized_rgba = nil  -- width/height change invalidates cached resize
+      s.resized_w = nil
+      s.resized_h = nil
+    end
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
     if s.opts.relative ~= 'ui' then
@@ -302,5 +308,8 @@ function M._supported(opts)
   end
   return ok, msg
 end
+
+-- Expose state for testing only.
+M._state = state
 
 return M
