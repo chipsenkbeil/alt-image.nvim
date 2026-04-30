@@ -47,17 +47,22 @@ local just_rerendered = false
 function M.rerender_all()
   if pending_rerender then return end
   pending_rerender = true
+  -- Set the recursion guard BEFORE mode() / redraw so the on_end fired by
+  -- those calls (during :redraw's processing) sees just_rerendered=true and
+  -- returns early instead of scheduling another rerender_all.
+  just_rerendered = true
   local old_termsync = vim.o.termsync
   vim.o.termsync = false
   util.term_send(SYNC_START)
-  vim.cmd.mode()                 -- forces TUI to flush; clears framebuffer pixels
-  pending_rerender = false       -- reset BEFORE re-emit (matches the fork)
+  vim.cmd.mode()
+  -- :redraw synchronously flushes Neovim's TUI grid to the TTY. Without
+  -- this, our nvim_ui_send-based emit below can race ahead of the text
+  -- repaint and end up overwritten when the TUI eventually flushes.
+  vim.cmd('redraw')
   emit_all_unsynced()
   util.term_send(SYNC_END)
   vim.o.termsync = old_termsync
-  -- Mark that the redraw scheduled by vim.cmd.mode() above is OUR redraw.
-  -- The next on_end firing should be skipped to avoid recursion.
-  just_rerendered = true
+  pending_rerender = false
 end
 
 -- Re-emit only. Use after Neovim has already painted (redraw cycle done).
