@@ -46,6 +46,15 @@ describe('alt-image.sixel set/get/del', function()
     assert.is_true(img.del(math.huge))
     assert.is_false(img.del(math.huge))
   end)
+
+  it('errors when set(id, opts) tries to change relative', function()
+    local id = img.set(png_bytes, { relative = 'ui', row = 1, col = 1,
+                                    width = 4, height = 4 })
+    assert.has_error(function()
+      img.set(id, { relative = 'editor' })
+    end)
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.sixel _supported', function()

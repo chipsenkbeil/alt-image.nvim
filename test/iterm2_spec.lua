@@ -66,6 +66,15 @@ describe('alt-image.iterm2 set/get/del', function()
     assert.equals(buf, img.get(id).buf)
     img.del(id)
   end)
+
+  it('errors when set(id, opts) tries to change relative', function()
+    local id = img.set('PNGBYTES', { relative = 'ui', row = 1, col = 1,
+                                     width = 4, height = 4 })
+    assert.has_error(function()
+      img.set(id, { relative = 'editor' })
+    end)
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.iterm2 del(math.huge)', function()

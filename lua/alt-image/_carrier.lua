@@ -11,9 +11,11 @@
 -- Position contract: positions are returned as a *list* of records of the
 -- shape `{ row, col, src = { x, y, w, h } }`. The list is empty (not nil)
 -- when nothing is currently visible. `src` describes the rect of the source
--- image (in image cells) that should be rendered at (row, col); in Phase 1
--- it always covers the full image and providers ignore it. Cropping in
--- subsequent phases tightens `src` to clip to terminal/window bounds.
+-- image (in image cells) that should be rendered at (row, col). For images
+-- fully visible within window/terminal bounds, src covers the entire image
+-- and providers use the cached full encoding. For partially-visible images,
+-- the carrier tightens src to the visible sub-rect and providers crop +
+-- re-encode before emitting.
 
 local M = {}
 
@@ -82,8 +84,8 @@ end
 -- (in image cells), and (row, col) is the upper-left of the visible portion
 -- on the terminal grid. Providers re-encode at the cropped dims.
 --
--- For 'editor' kind, bounds remain permissive in Phase 2 (`src` is full image);
--- editor-mode clipping is a future refinement.
+-- For 'editor' kind, bounds remain permissive (src covers full image, no
+-- terminal edge clipping); this is a known limitation.
 local function resolve_screen_positions(c)
   if c.kind == 'editor' then
     if not vim.api.nvim_win_is_valid(c.winid) then return {} end

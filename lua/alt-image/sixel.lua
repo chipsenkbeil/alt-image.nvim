@@ -183,8 +183,9 @@ end
 -- Closure factory: produces a position resolver for placement `id` that the
 -- render coordinator can call without knowing about provider internals.
 -- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,
--- possibly empty. Phase 1 always emits a single full-image src; cropping in
--- later phases may shrink src or split into multiple entries.
+-- possibly empty. For ui-mode, a single full-image src is emitted. For
+-- editor/buffer modes, the carrier may shrink src to clip against window
+-- bounds, and split into multiple entries (one per visible window).
 local function get_pos_for(id)
   return function()
     local s = state[id]
@@ -214,6 +215,12 @@ function M.set(data_or_id, opts)
     -- on partial-merge so canonicalize's default of 'ui' doesn't clobber it.
     local upd = canonicalize(opts)
     if not (opts and opts.relative) then upd.relative = s.opts.relative end
+    -- Explicit guard: if caller tries to change relative, error out.
+    if opts and opts.relative and opts.relative ~= s.opts.relative then
+      error(string.format(
+        'alt-image.sixel: cannot change relative on update (was %s, got %s); del and re-create instead',
+        s.opts.relative, opts.relative), 2)
+    end
     s.opts = vim.tbl_extend('force', s.opts, upd)
     s.sixel_cache = nil  -- opts changed -> may need re-encode if size changed
     s.sixel_cache_by_src = nil  -- crop cache also stale on opts change
