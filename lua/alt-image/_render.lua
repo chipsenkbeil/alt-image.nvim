@@ -85,20 +85,26 @@ local function tick()
 
   -- Emit, all inside one Mode 2026 sync block.
   is_drawing = true
-  util.term_send(SYNC_START)
-  if need_clear then vim.cmd.mode() end
-  -- Force TUI grid -> TTY flush so any queued text/float-bg paint lands
-  -- BEFORE our image bytes. Without this, the float-bg or text-repaint
-  -- output would race past SYNC_END and overwrite the image cells.
-  vim.cmd('redraw')
-  for _, p in ipairs(emit_set) do
-    if p.next_pos then p.provider._emit_at(p.id, p.next_pos) end
-    p.last_pos = p.next_pos
-    p.redraw = false
-  end
-  util.term_send(SYNC_END)
+  local old_termsync = vim.o.termsync
+  vim.o.termsync = false
+  local ok, err = pcall(function()
+    util.term_send(SYNC_START)
+    if need_clear then vim.cmd.mode() end
+    -- Force TUI grid -> TTY flush so any queued text/float-bg paint lands
+    -- BEFORE our image bytes. Without this, the float-bg or text-repaint
+    -- output would race past SYNC_END and overwrite the image cells.
+    vim.cmd('redraw')
+    for _, p in ipairs(emit_set) do
+      if p.next_pos then p.provider._emit_at(p.id, p.next_pos) end
+      p.last_pos = p.next_pos
+      p.redraw = false
+    end
+    util.term_send(SYNC_END)
+  end)
+  vim.o.termsync = old_termsync
   is_drawing = false
   clear_pending = false
+  if not ok then error(err) end
 end
 
 -- Public ---------------------------------------------------------------

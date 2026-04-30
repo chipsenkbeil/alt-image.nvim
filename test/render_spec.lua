@@ -86,4 +86,12 @@ describe('alt-image._render', function()
     render.flush()
     assert.equals(1, emitted)
   end)
+
+  it('restores vim.o.termsync after a flush', function()
+    local before = vim.o.termsync
+    local fake = { _emit_at = function() end }
+    render.register(fake, 1, function() return { row = 1, col = 1 } end)
+    render.flush()
+    assert.equals(before, vim.o.termsync)
+  end)
 end)
