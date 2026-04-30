@@ -43,6 +43,23 @@ describe('alt-image.iterm2 set/get/del', function()
     assert.is_false(img.del(id))
     assert.is_nil(img.get(id))
   end)
+
+  it('defaults relative to "buffer" when opts.buf is set', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'one', 'two' })
+    local id = img.set('PNGBYTES', { buf = buf, row = 1, col = 1,
+                                     width = 4, height = 4 })
+    assert.equals('buffer', img.get(id).relative)
+    img.del(id)
+  end)
+
+  it('resolves buf=0 to the current buffer', function()
+    local buf = vim.api.nvim_get_current_buf()
+    local id = img.set('PNGBYTES', { buf = 0, row = 1, col = 1,
+                                     width = 4, height = 4 })
+    assert.equals(buf, img.get(id).buf)
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.iterm2 del(math.huge)', function()

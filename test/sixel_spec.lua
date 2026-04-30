@@ -190,4 +190,32 @@ describe('alt-image.sixel relative=buffer', function()
     assert.is_true(img.get(id) ~= nil)  -- placement still registered
     img.del(id)
   end)
+
+  it('defaults relative to "buffer" when opts.buf is set', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'one', 'two' })
+    local id = img.set(png_bytes, { buf = buf, row = 1, col = 1,
+                                    width = 4, height = 4 })
+    assert.equals('buffer', img.get(id).relative)
+    img.del(id)
+  end)
+
+  it('resolves buf=0 to the current buffer', function()
+    local buf = vim.api.nvim_get_current_buf()
+    local id = img.set(png_bytes, { buf = 0, row = 1, col = 1,
+                                    width = 4, height = 4 })
+    assert.equals(buf, img.get(id).buf)
+    img.del(id)
+  end)
+
+  it('derives width/height from PNG IHDR when missing in non-ui mode', function()
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'one', 'two' })
+    -- 4x4 PNG; with default cell size 8x16, ceil(4/8)=1 and ceil(4/16)=1.
+    local id = img.set(png_bytes, { buf = buf, row = 1, col = 1 })
+    local got = img.get(id)
+    assert.is_true(type(got.width)  == 'number' and got.width  >= 1)
+    assert.is_true(type(got.height) == 'number' and got.height >= 1)
+    img.del(id)
+  end)
 end)

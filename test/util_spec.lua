@@ -41,6 +41,32 @@ describe('helpers', function()
   end)
 end)
 
+describe('_util.png_dimensions', function()
+  local util = require('alt-image._util')
+
+  it('parses width and height from a real PNG', function()
+    local f = assert(io.open('test/fixtures/4x4.png', 'rb'))
+    local data = f:read('*a'); f:close()
+    local w, h = util.png_dimensions(data)
+    assert.equals(4, w)
+    assert.equals(4, h)
+  end)
+
+  it('returns nil for non-PNG input', function()
+    local w, h = util.png_dimensions('not a png')
+    assert.is_nil(w)
+    assert.is_nil(h)
+  end)
+
+  it('returns nil for too-short PNG-signature input', function()
+    -- Valid 8-byte signature, but truncated before the IHDR width/height.
+    local data = '\137PNG\r\n\26\n' .. string.rep('\0', 4)
+    local w, h = util.png_dimensions(data)
+    assert.is_nil(w)
+    assert.is_nil(h)
+  end)
+end)
+
 describe('_sixel_encode', function()
   it('encodes a 4x4 solid-red RGBA buffer to a DCS sequence', function()
     -- 4x4 fully opaque red

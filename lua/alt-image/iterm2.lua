@@ -25,11 +25,15 @@ end
 
 local function canonicalize(opts)
   opts = opts or {}
-  local rel = opts.relative or 'ui'
+  -- relative defaults: if opts.buf is set, default to 'buffer'; else 'ui'.
+  local rel = opts.relative or (opts.buf ~= nil and 'buffer' or 'ui')
   if rel ~= 'ui' and rel ~= 'editor' and rel ~= 'buffer' then
     error('alt-image: invalid relative ' .. tostring(rel)
        .. " (expected 'ui', 'editor', or 'buffer')", 3)
   end
+  -- buf == 0 means current buffer.
+  local buf = opts.buf
+  if buf == 0 then buf = vim.api.nvim_get_current_buf() end
   return {
     row      = opts.row,
     col      = opts.col,
@@ -37,9 +41,24 @@ local function canonicalize(opts)
     height   = opts.height,
     zindex   = opts.zindex,
     relative = rel,
-    buf      = opts.buf,
+    buf      = buf,
     pad      = opts.pad,
   }
+end
+
+---For non-ui modes, derive width/height from PNG IHDR if not provided.
+---Mutates opts in-place.
+---@param data string raw image bytes (may not be PNG; we no-op if not)
+---@param opts table canonical opts
+local function derive_dims(data, opts)
+  if opts.relative == 'ui' or (opts.width and opts.height) then return end
+  if type(data) ~= 'string' then return end
+  local px_w, px_h = util.png_dimensions(data)
+  if not px_w then return end
+  util.query_cell_size()
+  local cell_w, cell_h = util.cell_pixel_size()
+  opts.width  = opts.width  or math.ceil(px_w / cell_w)
+  opts.height = opts.height or math.ceil(px_h / cell_h)
 end
 
 -- Public so _render can call us. Reads state[id], emits OSC 1337 at screen_pos.
@@ -101,6 +120,8 @@ function M.set(data_or_id, opts)
     local upd = canonicalize(opts)
     if not (opts and opts.relative) then upd.relative = s.opts.relative end
     s.opts = vim.tbl_extend('force', s.opts, upd)
+    -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
+    derive_dims(s.data, s.opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
     if s.opts.relative ~= 'ui' then
@@ -114,7 +135,10 @@ function M.set(data_or_id, opts)
 
   -- New placement path
   local id = new_id()
-  state[id] = { data = data_or_id, opts = canonicalize(opts), id = id }
+  local opts_canonical = canonicalize(opts)
+  -- If non-ui and dims missing, derive from the PNG IHDR.
+  derive_dims(data_or_id, opts_canonical)
+  state[id] = { data = data_or_id, opts = opts_canonical, id = id }
 
   if state[id].opts.relative ~= 'ui' then
     require('alt-image._carrier').register(M, id, state[id].opts)

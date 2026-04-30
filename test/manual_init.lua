@@ -20,8 +20,10 @@ vim.api.nvim_create_user_command('AltImageDemo', function(o)
   if mode == 'editor' then
     opts.relative = 'editor'
   elseif mode == 'buffer' then
-    opts.relative = 'buffer'
-    opts.buf = vim.api.nvim_get_current_buf()
+    -- Demonstrate PR #39496 defaulting: opts.buf set => relative='buffer';
+    -- buf=0 resolves to the current buffer. width/height are kept from above
+    -- so the demo image stays small (otherwise they'd derive from the PNG).
+    opts.buf = 0
     opts.row, opts.col = 1, 1
     opts.pad = 1
   end
