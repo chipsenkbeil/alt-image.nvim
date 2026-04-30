@@ -1,0 +1,5 @@
+# editor / OS
+.DS_Store
+*.swp
+*.swo
+tags
