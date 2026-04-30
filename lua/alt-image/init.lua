@@ -54,6 +54,11 @@ function M.get(id)   return M._provider().get(id)   end
 function M.del(id)   return M._provider().del(id)   end
 
 function M._supported(o)
+  if user_choice then
+    local ok, msg = PROVIDERS[user_choice]()._supported(o)
+    if ok then return true, user_choice .. ': ' .. (msg or '') end
+    return false, user_choice .. ': not supported'
+  end
   for _, name in ipairs(DETECT_ORDER) do
     local p = PROVIDERS[name]()
     local ok, msg = p._supported(o)

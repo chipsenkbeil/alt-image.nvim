@@ -50,8 +50,10 @@ Pre-1.0. API tracks Neovim's `vim.ui.img` post-PRs #37914, #39449, #39484,
   passed through inconsistently. Use the plugin in a bare terminal for now.
 - **No external UI / multigrid support.** Carrier coordinate math assumes
   the default global UI grid.
-- **PNG only.** Both protocols can in principle take other formats, but
-  sixel needs decoded RGBA so this plugin ships PNG decode only.
+- **Sixel: PNG only.** The sixel provider decodes input bytes to RGBA via
+  the bundled pure-Lua PNG decoder, so non-PNG bytes will fail. The iTerm2
+  provider base64-encodes input verbatim and passes through to the
+  terminal — formats other than PNG may work depending on the terminal.
 
 ## License
 

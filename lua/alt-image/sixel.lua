@@ -29,13 +29,18 @@ local function new_id() local id = next_id; next_id = next_id + 1; return id end
 
 local function canonicalize(opts)
   opts = opts or {}
+  local rel = opts.relative or 'ui'
+  if rel ~= 'ui' and rel ~= 'editor' and rel ~= 'buffer' then
+    error('alt-image: invalid relative ' .. tostring(rel)
+       .. " (expected 'ui', 'editor', or 'buffer')", 3)
+  end
   return {
     row      = opts.row,
     col      = opts.col,
     width    = opts.width,
     height   = opts.height,
     zindex   = opts.zindex,
-    relative = opts.relative or 'ui',
+    relative = rel,
     buf      = opts.buf,
     pad      = opts.pad,
   }
@@ -46,6 +51,7 @@ local function build_sixel(s)
   local img = png.decode(s.data)
   local rgba, w, h = img.pixels, img.width, img.height
   if s.opts.width or s.opts.height then
+    util.query_cell_size()
     local cw, ch = util.cell_pixel_size()
     local tw = (s.opts.width  or math.ceil(w / cw)) * cw
     local th = (s.opts.height or math.ceil(h / ch)) * ch

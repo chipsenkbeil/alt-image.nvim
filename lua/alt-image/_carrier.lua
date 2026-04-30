@@ -1,7 +1,6 @@
 -- lua/alt-image/_carrier.lua
 -- Reserves screen real estate via floating windows / extmarks for placements
 -- with relative != 'ui', and triggers re-emit on scroll/resize.
-local util = require('alt-image._util')
 
 local M = {}
 
