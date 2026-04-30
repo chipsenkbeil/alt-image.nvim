@@ -459,6 +459,50 @@ describe('alt-image.iterm2 relative=buffer', function()
     img.del(id); vim.cmd('only')
   end)
 
+  it('top-crops via topfill when anchor is just above topline', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    local lines = {}
+    for i = 1, 30 do lines[i] = 'L' .. i end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_set_current_buf(buf)
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    -- One <C-e>: anchor (line 1) scrolls just above topline; topfill=10.
+    -- All 10 virt_lines remain visible at the top of the window.
+    local CE = vim.api.nvim_replace_termcodes('<C-e>', true, false, true)
+    vim.cmd('normal! ' .. CE)
+    local positions = require('alt-image._carrier').get_positions(
+      require('alt-image.iterm2'), id)
+    assert.is_true(#positions >= 1)
+    -- src.y=0, src.h=10: full image visible, anchored at win_top.
+    assert.equals(0, positions[1].src.y)
+    assert.equals(10, positions[1].src.h)
+    img.del(id); vim.cmd('only')
+  end)
+
+  it('top-crop reduces src.h as more virt_lines scroll off', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    local lines = {}
+    for i = 1, 30 do lines[i] = 'L' .. i end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_set_current_buf(buf)
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    local CE = vim.api.nvim_replace_termcodes('<C-e>', true, false, true)
+    -- 1st Ctrl-E: anchor goes off, topfill=10 (full image visible at top).
+    -- Each subsequent Ctrl-E removes 1 visible virt_line from the top.
+    -- 5 total Ctrl-E → topfill=6, 4 rows of image cropped from the top.
+    for _ = 1, 5 do vim.cmd('normal! ' .. CE) end
+    local positions = require('alt-image._carrier').get_positions(
+      require('alt-image.iterm2'), id)
+    assert.is_true(#positions >= 1)
+    assert.equals(4, positions[1].src.y)
+    assert.equals(6, positions[1].src.h)
+    img.del(id); vim.cmd('only')
+  end)
+
   it('emits OSC 1337 with cropped dimensions when src is a sub-rect', function()
     local png_bytes = read_fixture()
     local buf = vim.api.nvim_create_buf(true, false)

@@ -111,11 +111,13 @@ local function resolve_screen_positions(c)
     if not mark or not mark[1] then return {} end
     local details = mark[3]
     if details and details.invalid then return {} end
-    local line = mark[1] + 1
+    local anchor_line = mark[1] + 1
     local line_count = vim.api.nvim_buf_line_count(c.bufnr)
-    if line < 1 or line > line_count then return {} end
+    if anchor_line < 1 or anchor_line > line_count then return {} end
     local col  = (mark[2] or 0) + 1
     local pad = (c.opts and c.opts.pad) or 0
+    local img_w = c.opts.width  or 1
+    local img_h = c.opts.height or 1
     local out = {}
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
@@ -126,21 +128,63 @@ local function resolve_screen_positions(c)
         local win_bottom  = win_top  + vim.api.nvim_win_get_height(win) - 1
         local win_right   = win_left + vim.api.nvim_win_get_width(win)  - 1
 
-        -- Resolve the anchor's screen position via screenpos.
-        -- When screenpos returns row=0, the anchor is off-screen; skip.
-        local ok, sp = pcall(vim.fn.screenpos, win, line, col)
-        if ok and sp and sp.row > 0 then
-          -- The image goes BELOW the anchor's row.
-          local image_anchor_row = sp.row + 1
-          local image_anchor_col = sp.col + pad
+        -- Read scroll state to detect partial-top-visibility via topfill: when
+        -- the anchor line has scrolled just above the window, its virt_lines
+        -- can still be partially rendered as `topfill` filler rows at the top
+        -- of the window. screenpos() reports row=0 for the off-screen anchor,
+        -- so we have to compute the visible sub-rect from topfill ourselves.
+        local view_ok, view = pcall(vim.api.nvim_win_call, win, vim.fn.winsaveview)
+        local topline = (view_ok and view and view.topline) or 1
+        local topfill = (view_ok and view and view.topfill) or 0
+
+        local image_anchor_row, image_anchor_col, src_y_offset, src_h_max
+
+        if anchor_line >= topline then
+          -- Anchor is at or below topline: should be visible (resolve via
+          -- screenpos, which respects wraps, folds, signcolumn, etc.).
+          local sp_ok, sp = pcall(vim.fn.screenpos, win, anchor_line, col)
+          if sp_ok and sp and sp.row > 0 then
+            image_anchor_row = sp.row + 1   -- first virt_line below anchor
+            image_anchor_col = sp.col + pad
+            src_y_offset     = 0
+            src_h_max        = img_h
+          end
+        elseif anchor_line == topline - 1 and topfill > 0 then
+          -- Anchor is just above topline; its virt_lines are partially visible
+          -- as `topfill` filler rows at the top of the window. The bottom
+          -- `min(topfill, img_h)` rows of the image render at win_top onward.
+          -- Approximation/caveat: if other extmarks above topline ALSO
+          -- contribute to topfill, this over-attributes rows to our image.
+          -- For alt-image's typical one-image-per-buffer use it's fine.
+          local visible = math.min(topfill, img_h)
+          local skipped = img_h - visible
+          image_anchor_row = win_top
+          -- Probe screenpos for a known-visible line at our column to pick up
+          -- signcolumn/number offsets. topline is always visible.
+          local probe_ok, probe = pcall(vim.fn.screenpos, win, topline, col)
+          local probe_col = (probe_ok and probe and probe.col and probe.col > 0)
+            and probe.col or win_left
+          image_anchor_col = probe_col + pad
+          src_y_offset     = skipped
+          src_h_max        = visible
+        end
+        -- else: anchor and all virt_lines are off-screen; no position.
+
+        if image_anchor_row then
           local p = util.clip_to_bounds(
             image_anchor_row, image_anchor_col,
-            c.opts.width or 1, c.opts.height or 1,
+            img_w, src_h_max,
             win_top, win_left, win_bottom, win_right
           )
-          if p then out[#out + 1] = p end
+          if p then
+            -- clip_to_bounds operates on the (possibly already top-skipped)
+            -- sub-image of height src_h_max; combine its returned src.y with
+            -- the topfill-induced skip so the provider crops at the correct
+            -- offset within the *original* image.
+            p.src.y = p.src.y + src_y_offset
+            out[#out + 1] = p
+          end
         end
-        -- else: anchor not visible in this window; no position.
       end
     end
     return out
