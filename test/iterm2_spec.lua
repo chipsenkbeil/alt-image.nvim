@@ -4,10 +4,7 @@ describe('alt-image.iterm2 set/get/del', function()
   local img
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.iterm2'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.iterm2')
+    img = H.fresh_provider('iterm2')
   end)
 
   it('set returns an id and emits an OSC 1337 sequence', function()
@@ -52,10 +49,7 @@ describe('alt-image.iterm2 del(math.huge)', function()
   local img
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.iterm2'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.iterm2')
+    img = H.fresh_provider('iterm2')
   end)
 
   it('clears all placements', function()
@@ -99,10 +93,7 @@ describe('alt-image.iterm2 relative=editor', function()
   local img
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.iterm2'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.iterm2')
+    img = H.fresh_provider('iterm2')
   end)
 
   it('opens a floating-window carrier and emits at its screen pos', function()
@@ -143,10 +134,7 @@ describe('alt-image.iterm2 relative=buffer', function()
   local img
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.iterm2'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.iterm2')
+    img = H.fresh_provider('iterm2')
   end)
 
   it('places an extmark with virt_lines reserving height + 2*pad rows', function()

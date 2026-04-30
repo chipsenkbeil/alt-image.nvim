@@ -58,7 +58,7 @@ describe('alt-image._render', function()
     assert.matches('\027%[%?2026h', H.captured())
   end)
 
-  it('a clear-triggering invalidate redraws ALL placements, not just the dirty one', function()
+  it('invalidate of one placement re-emits only that placement (no clear)', function()
     local emitted = { [1] = 0, [2] = 0, [3] = 0 }
     local fake = {
       _emit_at = function(id, _pos) emitted[id] = (emitted[id] or 0) + 1 end,
@@ -70,10 +70,30 @@ describe('alt-image._render', function()
     assert.equals(1, emitted[1])
     assert.equals(1, emitted[2])
     assert.equals(1, emitted[3])
-    -- Mark only id 1 dirty WITH clear flag.
-    render.invalidate(fake, 1, true)
+    -- Mark only id 1 dirty. With same position, no clear is triggered;
+    -- only the dirty placement should re-emit.
+    render.invalidate(fake, 1)
     render.flush()
-    -- Because clear_pending was set, all three should have been re-emitted.
+    assert.equals(2, emitted[1])
+    assert.equals(1, emitted[2])
+    assert.equals(1, emitted[3])
+  end)
+
+  it('position change of an invalidated placement triggers re-emit of all', function()
+    local emitted = { [1] = 0, [2] = 0, [3] = 0 }
+    local fake = {
+      _emit_at = function(id, _pos) emitted[id] = (emitted[id] or 0) + 1 end,
+    }
+    local pos1 = { row = 1, col = 1 }
+    render.register(fake, 1, function() return pos1 end)
+    render.register(fake, 2, function() return { row = 2, col = 2 } end)
+    render.register(fake, 3, function() return { row = 3, col = 3 } end)
+    render.flush()  -- initial paint: all three emitted once
+    -- Move id 1 and invalidate. Position-diff should drive a clear, which
+    -- re-emits all placements.
+    pos1 = { row = 9, col = 9 }
+    render.invalidate(fake, 1)
+    render.flush()
     assert.equals(2, emitted[1])
     assert.equals(2, emitted[2])
     assert.equals(2, emitted[3])

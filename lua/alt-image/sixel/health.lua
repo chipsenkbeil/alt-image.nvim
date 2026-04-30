@@ -11,7 +11,8 @@ function M.check()
   else
     h.error('Sixel protocol: not detected. '
          .. (msg or 'Detection failed. Try a sixel-capable terminal '
-                 .. '(iTerm.app, WezTerm, foot, mlterm, contour, xterm +sixel), '
+                 .. '(Windows Terminal, iTerm.app, WezTerm, foot, mlterm, '
+                 .. 'contour, xterm with +sixel build), '
                  .. 'or set TERM=xterm-sixel, or call '
                  .. 'require("alt-image").setup({ protocol = "sixel" }) to force.'))
   end

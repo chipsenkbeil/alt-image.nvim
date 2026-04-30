@@ -61,6 +61,17 @@ function H.parse_sixel_seq(s)
   return out
 end
 
+-- Reset all alt-image module loads and require the named provider fresh.
+-- Use in spec before_each blocks to avoid stale state across tests.
+function H.fresh_provider(name)
+  package.loaded['alt-image']           = nil
+  package.loaded['alt-image.iterm2']    = nil
+  package.loaded['alt-image.sixel']     = nil
+  package.loaded['alt-image._render']   = nil
+  package.loaded['alt-image._carrier']  = nil
+  return require('alt-image.' .. name)
+end
+
 -- Mock the env vars / TERM_PROGRAM for detection tests.
 -- Use the value `false` to *unset* an env var for the duration of `fn`.
 function H.with_env(vars, fn)

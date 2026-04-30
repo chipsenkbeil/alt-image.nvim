@@ -1,4 +1,3 @@
-local util = require('alt-image._util')
 local H = require('test.helpers')
 local senc = require('alt-image._sixel_encode')
 
@@ -9,17 +8,6 @@ describe('harness', function()
 
   it('does deep equal', function()
     assert.same({ a = { b = 1 } }, { a = { b = 1 } })
-  end)
-end)
-
-describe('_util', function()
-  it('query_csi falls back synchronously when vim.tty absent', function()
-    local saved = rawget(vim, 'tty')
-    rawset(vim, 'tty', nil)
-    local done = false
-    util.query_csi('whatever', { timeout = 10 }, function(r) done = (r == nil) end)
-    assert.is_true(done)  -- synchronous; no vim.wait needed
-    rawset(vim, 'tty', saved)
   end)
 end)
 

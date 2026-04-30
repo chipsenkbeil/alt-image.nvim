@@ -14,9 +14,6 @@ local render  = require('alt-image._render')
 
 local M = {}
 
-local SYNC_START = '\027[?2026h'
-local SYNC_END   = '\027[?2026l'
-
 local KNOWN_SIXEL_TERMS = {
   foot = true, mlterm = true, contour = true,
 }
@@ -74,9 +71,8 @@ function M._emit_at(id, screen_pos)
   local cmove = string.format('\027[%d;%dH',
                               screen_pos and screen_pos.row or (opts.row or 1),
                               screen_pos and screen_pos.col or (opts.col or 1))
-  util.term_send(SYNC_START
-    .. '\0277' .. '\027[?25l' .. cmove .. sixel
-    .. '\0278' .. '\027[?25h' .. SYNC_END)
+  util.term_send('\0277' .. '\027[?25l' .. cmove .. sixel
+    .. '\0278' .. '\027[?25h')
 end
 
 -- Closure factory: produces a position resolver for placement `id` that the
@@ -113,8 +109,8 @@ function M.set(data_or_id, opts)
     if s.opts.relative ~= 'ui' then
       require('alt-image._carrier').update(M, data_or_id, s.opts)
     end
-    -- Mark dirty AND queue a clear, since the position likely moved.
-    render.invalidate(M, data_or_id, true)
+    -- Mark dirty; the position-diff in tick() drives clearing automatically.
+    render.invalidate(M, data_or_id)
     render.flush()
     return data_or_id
   end
@@ -163,6 +159,9 @@ function M._supported(opts)
   if vim.env.TERM_PROGRAM == 'Apple_Terminal' then
     return false, 'Apple Terminal does not support sixel'
   end
+  if vim.env.WT_SESSION then
+    return true, 'WT_SESSION (Windows Terminal)'
+  end
   local tp = vim.env.TERM_PROGRAM
   if tp and SUPPORTING_TERM_PROGRAMS[tp] then
     return true, 'TERM_PROGRAM=' .. tp
@@ -171,15 +170,19 @@ function M._supported(opts)
   if term:find('sixel', 1, true) or KNOWN_SIXEL_TERMS[term] then
     return true, 'TERM=' .. term
   end
-  -- DA1 probe (CSI c) — response includes ;4 if sixel supported.
+  -- DA1 probe (CSI c) — response includes ;4 if sixel supported. When
+  -- vim.tty is absent on stable Neovim, we skip the probe entirely.
+  local timeout = opts.timeout or 1000
   local done, ok, msg = false, false, nil
-  util.query_csi('\027[c', { timeout = opts.timeout or 1000 }, function(resp)
-    if resp and resp:find(';4', 1, true) then
-      ok, msg = true, resp
-    end
-    done = true
-  end)
-  vim.wait((opts.timeout or 1000) + 100, function() return done end)
+  if vim.tty and vim.tty.query_csi then
+    vim.tty.query_csi('\027[c', { timeout = timeout }, function(resp)
+      if resp and resp:find(';4', 1, true) then
+        ok, msg = true, resp
+      end
+      done = true
+    end)
+    vim.wait(timeout + 100, function() return done end)
+  end
   return ok, msg
 end
 

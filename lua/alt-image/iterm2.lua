@@ -8,9 +8,6 @@ local render  = require('alt-image._render')
 
 local M = {}
 
-local SYNC_START = '\027[?2026h'
-local SYNC_END   = '\027[?2026l'
-
 local FAST_TERM_PROGRAMS = {
   ['iTerm.app'] = true,
   ['WezTerm']   = true,
@@ -71,8 +68,8 @@ function M._emit_at(id, screen_pos)
   }
 
   local osc = '\027]1337;File=' .. table.concat(args, ';') .. ':' .. b64 .. '\007'
-  util.term_send(SYNC_START .. cs.save .. cs.hide .. cs.move
-    .. osc .. cs.restore .. cs.show .. SYNC_END)
+  util.term_send(cs.save .. cs.hide .. cs.move
+    .. osc .. cs.restore .. cs.show)
 end
 
 -- Closure factory: produces a position resolver for placement `id` that the
@@ -109,8 +106,8 @@ function M.set(data_or_id, opts)
     if s.opts.relative ~= 'ui' then
       require('alt-image._carrier').update(M, data_or_id, s.opts)
     end
-    -- Mark dirty AND queue a clear, since the position likely moved.
-    render.invalidate(M, data_or_id, true)
+    -- Mark dirty; the position-diff in tick() drives clearing automatically.
+    render.invalidate(M, data_or_id)
     render.flush()
     return data_or_id
   end
@@ -161,17 +158,20 @@ function M._supported(opts)
     return true, 'TERM_PROGRAM=' .. tp
   end
 
-  -- Probe via XTVERSION (CSI > q). Polyfilled util returns nil if not
-  -- supported on this Neovim build, in which case we default to false.
+  -- Probe via XTVERSION (CSI > q). When vim.tty is absent on stable Neovim,
+  -- we skip the probe entirely and fall through to a `false` return.
+  local timeout = opts.timeout or 1000
   local done, ok, msg = false, false, nil
-  util.query_csi('\027[>q', { timeout = opts.timeout or 1000 }, function(resp)
-    if resp and (resp:find('iTerm2', 1, true)
-              or resp:find('WezTerm', 1, true)) then
-      ok, msg = true, resp
-    end
-    done = true
-  end)
-  vim.wait((opts.timeout or 1000) + 100, function() return done end)
+  if vim.tty and vim.tty.query_csi then
+    vim.tty.query_csi('\027[>q', { timeout = timeout }, function(resp)
+      if resp and (resp:find('iTerm2', 1, true)
+                or resp:find('WezTerm', 1, true)) then
+        ok, msg = true, resp
+      end
+      done = true
+    end)
+    vim.wait(timeout + 100, function() return done end)
+  end
   return ok, msg
 end
 

@@ -165,29 +165,4 @@ M.generate_id = (function()
   end
 end)()
 
--- vim.tty.query_csi / query_apc are added by the fork branch but not present
--- on stable Neovim. Polyfill: defer to vim.tty.* if available, else schedule
--- the callback with `nil` after the requested timeout so callers fall through
--- to env-var heuristics.
-
-local function _has_vim_tty(name)
-  return vim.tty and type(vim.tty[name]) == 'function'
-end
-
-function M.query_csi(payload, opts, cb)
-  if _has_vim_tty('query_csi') then
-    return vim.tty.query_csi(payload, opts, cb)
-  end
-  -- No probe support on this Neovim. Fail fast so callers don't block.
-  cb(nil)
-end
-
-function M.query_apc(payload, opts, cb)
-  if _has_vim_tty('query_apc') then
-    return vim.tty.query_apc(payload, opts, cb)
-  end
-  -- No probe support on this Neovim. Fail fast so callers don't block.
-  cb(nil)
-end
-
 return M

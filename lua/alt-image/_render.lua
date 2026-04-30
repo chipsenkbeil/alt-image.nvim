@@ -36,12 +36,6 @@ local is_drawing = false
 
 local function key(provider, id) return tostring(provider) .. ':' .. tostring(id) end
 
-local function pos_eq(a, b)
-  if a == nil and b == nil then return true end
-  if a == nil or b == nil then return false end
-  return a.row == b.row and a.col == b.col
-end
-
 -- The core scheduler step: re-emit all dirty placements, clearing the
 -- framebuffer first if anything moved or unregistered.
 --
@@ -126,10 +120,9 @@ function M.unregister(provider, id)
   end
 end
 
-function M.invalidate(provider, id, also_clear)
+function M.invalidate(provider, id)
   local p = placements[key(provider, id)]
   if p then p.redraw = true end
-  if also_clear then clear_pending = true end
 end
 
 -- Synchronously run a tick. Used by callers that need immediate emission

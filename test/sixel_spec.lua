@@ -10,10 +10,7 @@ describe('alt-image.sixel set/get/del', function()
   local img, png_bytes
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.sixel'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.sixel')
+    img = H.fresh_provider('sixel')
     png_bytes = read_fixture()
   end)
 
@@ -92,16 +89,21 @@ describe('alt-image.sixel _supported', function()
       assert.is_true(require('alt-image.sixel')._supported())
     end)
   end)
+
+  it('returns true via WT_SESSION (Windows Terminal)', function()
+    H.with_env({ WT_SESSION = 'fake-uuid', TERM = 'xterm-256color',
+                 TERM_PROGRAM = false }, function()
+      local img = H.fresh_provider('sixel')
+      assert.is_true(img._supported())
+    end)
+  end)
 end)
 
 describe('alt-image.sixel relative=editor', function()
   local img, png_bytes
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.sixel'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.sixel')
+    img = H.fresh_provider('sixel')
     png_bytes = read_fixture()
   end)
 
@@ -141,10 +143,7 @@ describe('alt-image.sixel relative=buffer', function()
   local img, png_bytes
   before_each(function()
     H.setup_capture()
-    package.loaded['alt-image.sixel'] = nil
-    package.loaded['alt-image._render'] = nil
-    package.loaded['alt-image._carrier'] = nil
-    img = require('alt-image.sixel')
+    img = H.fresh_provider('sixel')
     png_bytes = read_fixture()
   end)
 
