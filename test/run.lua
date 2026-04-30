@@ -57,6 +57,7 @@ _G.assert = setmetatable({
 -- Discover and load spec files.
 local dir = cwd .. '/test'
 local fd = vim.uv.fs_scandir(dir)
+assert(fd, 'cannot scandir ' .. dir)
 local specs = {}
 while fd do
   local name, t = vim.uv.fs_scandir_next(fd)
@@ -66,21 +67,32 @@ while fd do
   end
 end
 table.sort(specs)
+if #specs == 0 then
+  print('no spec files found in ' .. dir)
+  os.exit(1)
+end
 for _, path in ipairs(specs) do dofile(path) end
 
 -- Run suites.
 for _, suite in ipairs(M.suites) do
   print('# ' .. suite.name)
   for _, t in ipairs(suite.tests) do
-    if t.before then pcall(t.before) end
-    local ok, err = pcall(t.fn)
-    if ok then
-      M.passed = M.passed + 1
-      print('  ok   - ' .. t.name)
-    else
+    local before_ok, before_err = true, nil
+    if t.before then before_ok, before_err = pcall(t.before) end
+    if not before_ok then
       M.failed = M.failed + 1
-      print('  FAIL - ' .. t.name)
-      print('         ' .. tostring(err):gsub('\n', '\n         '))
+      print('  FAIL - ' .. t.name .. ' (before_each)')
+      print('         ' .. tostring(before_err):gsub('\n', '\n         '))
+    else
+      local ok, err = pcall(t.fn)
+      if ok then
+        M.passed = M.passed + 1
+        print('  ok   - ' .. t.name)
+      else
+        M.failed = M.failed + 1
+        print('  FAIL - ' .. t.name)
+        print('         ' .. tostring(err):gsub('\n', '\n         '))
+      end
     end
   end
 end
