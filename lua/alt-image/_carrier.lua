@@ -51,11 +51,15 @@ local function place_buffer_extmark(opts)
   local _, h = size_in_cells(opts)
   local virt = {}
   for _ = 1, h do virt[#virt + 1] = { { '', 'Normal' } } end
+  local row = (opts.row or 1) - 1
   return vim.api.nvim_buf_set_extmark(opts.buf, NS,
-    (opts.row or 1) - 1, (opts.col or 1) - 1, {
+    row, (opts.col or 1) - 1, {
+      end_row = row + 1,
+      end_col = 0,
       virt_lines = virt,
       virt_lines_above = false,
       invalidate = true,
+      undo_restore = false,
     })
 end
 
@@ -68,8 +72,10 @@ local function resolve_screen_pos(c)
   else
     -- relative='buffer': find a window showing this buffer; use screenpos.
     if not vim.api.nvim_buf_is_valid(c.bufnr) then return nil end
-    local mark = vim.api.nvim_buf_get_extmark_by_id(c.bufnr, NS, c.extmark_id, {})
+    local mark = vim.api.nvim_buf_get_extmark_by_id(c.bufnr, NS, c.extmark_id, { details = true })
     if not mark or not mark[1] then return nil end
+    local details = mark[3]
+    if details and details.invalid then return nil end
     local line = mark[1] + 1
     local line_count = vim.api.nvim_buf_line_count(c.bufnr)
     if line < 1 or line > line_count then return nil end
