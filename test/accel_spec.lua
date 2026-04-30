@@ -7,12 +7,13 @@ local H = require('test.helpers')
 -- Stand up a controlled environment for one test:
 -- - executable_for: { [name]=true|false } overrides for vim.fn.executable
 -- - system_handler: function(cmd, opts) -> { code, stdout } (or nil to error)
--- - accelerate:     boolean for setup({ accelerate = ... })
+-- - accelerate:     boolean for vim.g.alt_image.accelerate
 -- Returns the fresh _sixel_encode module + a `calls` array recording each
 -- vim.system invocation as { cmd = {...}, opts = {...} }.
 local function with_mocks(executable_for, system_handler, accelerate)
   local saved_system     = vim.system
   local saved_executable = vim.fn.executable
+  local saved_g          = vim.g.alt_image
 
   vim.fn.executable = function(name)
     local v = executable_for[name]
@@ -35,15 +36,15 @@ local function with_mocks(executable_for, system_handler, accelerate)
   package.loaded['alt-image._util']         = nil
   package.loaded['alt-image._sixel_encode'] = nil
   package.loaded['alt-image._png_encode']   = nil
-  require('alt-image').setup({ accelerate = accelerate })
+  vim.g.alt_image = { accelerate = accelerate }
   local senc = require('alt-image._sixel_encode')
-  -- Belt-and-suspenders: clear the executable cache in case the module was
-  -- already loaded transitively before our reset (e.g. via setup()).
+  -- Belt-and-suspenders: clear the executable cache.
   require('alt-image._util')._reset_executable_cache()
 
   return senc, calls, function()
-    vim.system     = saved_system
+    vim.system        = saved_system
     vim.fn.executable = saved_executable
+    vim.g.alt_image   = saved_g
   end
 end
 
@@ -230,15 +231,94 @@ describe('crop_and_encode_png', function()
   end)
 end)
 
+-- Integration: a buffer-anchored placement gets cropped because its window is
+-- too short, the sixel provider's fast path detects PNG input + no resize
+-- requested + convert available, and feeds the original PNG through
+-- `convert -crop`. We assert the captured emit contains the canned bytes
+-- returned by our mock convert.
+describe('accel-with-crop integration', function()
+  local function read_fixture()
+    local f = io.open('test/fixtures/4x4.png', 'rb')
+    local b = f:read('*a'); f:close()
+    return b
+  end
+
+  it('sixel provider routes a window-clipped placement through convert', function()
+    local saved_system     = vim.system
+    local saved_executable = vim.fn.executable
+    local saved_g          = vim.g.alt_image
+
+    vim.fn.executable = function(name)
+      if name == 'convert'   then return 1 end
+      if name == 'img2sixel' then return 0 end
+      return saved_executable(name)
+    end
+    local convert_calls = {}
+    vim.system = function(cmd, opts)
+      table.insert(convert_calls, { cmd = cmd, opts = opts })
+      return { wait = function()
+        return { code = 0, stdout = 'CONVERT_SIXEL_BYTES' }
+      end }
+    end
+
+    -- Reload everything under the new env.
+    package.loaded['alt-image']               = nil
+    package.loaded['alt-image._util']         = nil
+    package.loaded['alt-image._sixel_encode'] = nil
+    package.loaded['alt-image._png_encode']   = nil
+    package.loaded['alt-image.sixel']         = nil
+    package.loaded['alt-image._render']       = nil
+    package.loaded['alt-image._carrier']      = nil
+    vim.g.alt_image = { accelerate = true }
+    require('alt-image._util')._reset_executable_cache()
+
+    H.setup_capture()
+    local img = require('alt-image.sixel')
+
+    -- Build a setup that triggers cropping: small window, image taller than
+    -- the visible region.
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'x' })
+    vim.api.nvim_set_current_buf(buf)
+    vim.cmd('resize 3')
+
+    H.reset_capture()
+    local id = img.set(read_fixture(), { relative = 'buffer', buf = buf,
+                                          row = 1, col = 1,
+                                          width = 4, height = 10 })
+
+    -- We expect convert to have been invoked at least once (either via the
+    -- combined crop+encode fast path, or via encode_sixel_dispatch on the
+    -- already-cropped RGBA buffer).
+    local saw_convert = false
+    for _, call in ipairs(convert_calls) do
+      if call.cmd[1] == 'convert' then saw_convert = true; break end
+    end
+
+    -- Verify the captured emit contains our canned bytes.
+    local cap = H.captured()
+    local saw_canned = cap:find('CONVERT_SIXEL_BYTES', 1, true) ~= nil
+
+    img.del(id)
+    vim.cmd('resize')
+
+    -- Restore.
+    vim.system        = saved_system
+    vim.fn.executable = saved_executable
+    vim.g.alt_image   = saved_g
+
+    assert.is_true(saw_convert, 'expected convert to be invoked')
+    assert.is_true(saw_canned,
+      'expected captured emit to contain canned CONVERT_SIXEL_BYTES')
+  end)
+end)
+
 -- After this spec finishes, restore deterministic defaults for any later
--- specs that share the alt-image config (defensive: setup() default is on,
--- but other specs use H.fresh_provider which forces off again).
+-- specs that share the alt-image config.
 describe('accel cleanup', function()
   it('leaves accelerate=false for subsequent specs', function()
-    require('alt-image').setup({ accelerate = false })
-    -- Avoid leaking mocks (with_mocks restores per-test; this is just a
-    -- defensive belt-and-suspenders check).
-    assert.equals(false, require('alt-image')._config.accelerate)
+    vim.g.alt_image = { accelerate = false }
+    assert.equals(false, (vim.g.alt_image or {}).accelerate)
     -- Tag H so static analyzers don't flag the import as unused.
     _ = H
   end)

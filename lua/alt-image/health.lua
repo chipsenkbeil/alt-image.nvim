@@ -29,8 +29,10 @@ function M.check()
 
   -- Acceleration tooling
   local util = require('alt-image._util')
-  local accel = (mod._config and mod._config.accelerate) and true or false
-  h.info('Acceleration: ' .. (accel and 'enabled' or 'disabled'))
+  local g = vim.g.alt_image or {}
+  local accel = (g.accelerate ~= false)
+  h.info('Acceleration: ' .. (accel and 'enabled' or 'disabled')
+      .. ' (set vim.g.alt_image = { accelerate = false } to disable)')
   if util.have_img2sixel() then
     h.ok('img2sixel detected — sixel encoding accelerated')
   else

@@ -414,19 +414,15 @@ M.encode_sixel = _encode_sixel
 -- straight to `convert -crop` and avoids the decode -> crop -> re-encode
 -- round-trip entirely.
 --
--- Dispatchers read `require('alt-image')._config.accelerate` lazily so we
--- don't introduce a require-time cycle (`alt-image` -> sixel/iterm2 ->
--- `_sixel_encode` -> `alt-image`).
+-- Dispatchers read `vim.g.alt_image.accelerate` directly at call-time so
+-- toggles take effect without re-requiring, and there's no module cycle.
 
 local _util = require('alt-image._util')
 
 local function _accelerate_enabled()
-  -- Lazy require avoids a circular dep at module load.
-  local ok, top = pcall(require, 'alt-image')
-  if not ok or type(top) ~= 'table' then return true end
-  local cfg = top._config
-  if not cfg then return true end
-  return cfg.accelerate and true or false
+  local g = vim.g.alt_image or {}
+  if g.accelerate == nil then return true end
+  return g.accelerate and true or false
 end
 
 ---Run a subprocess synchronously and return stdout on success, nil on fail.

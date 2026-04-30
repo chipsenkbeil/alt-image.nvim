@@ -144,11 +144,12 @@ vim.api.nvim_create_user_command('AltImageInfo', function()
 
   -- External-tool acceleration status
   local util = require('alt-image._util')
-  local cfg = require('alt-image')._config or {}
+  local g = vim.g.alt_image or {}
+  local accel = (g.accelerate ~= false)
   table.insert(lines, '')
   table.insert(lines, 'Acceleration:')
   table.insert(lines, string.format('  accelerate     = %s',
-    tostring(cfg.accelerate)))
+    tostring(accel)))
   table.insert(lines, string.format('  img2sixel      = %s',
     util.have_img2sixel() and 'detected' or 'not found'))
   table.insert(lines, string.format('  convert        = %s',

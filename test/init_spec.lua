@@ -1,7 +1,17 @@
 local H = require('test.helpers')
 
 describe('alt-image init', function()
+  local saved_g
   before_each(function()
+    package.loaded['alt-image']        = nil
+    package.loaded['alt-image.iterm2'] = nil
+    package.loaded['alt-image.sixel']  = nil
+    saved_g = vim.g.alt_image
+    vim.g.alt_image = nil
+  end)
+
+  after_each(function()
+    vim.g.alt_image = saved_g
     package.loaded['alt-image']        = nil
     package.loaded['alt-image.iterm2'] = nil
     package.loaded['alt-image.sixel']  = nil
@@ -21,11 +31,19 @@ describe('alt-image init', function()
     end)
   end)
 
-  it('setup({protocol=...}) overrides autodetect', function()
+  it('vim.g.alt_image.protocol overrides autodetect', function()
     H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
+      vim.g.alt_image = { protocol = 'sixel' }
       local m = require('alt-image')
-      m.setup({ protocol = 'sixel' })
       assert.equals(require('alt-image.sixel'), m._provider())
+    end)
+  end)
+
+  it('protocol="auto" still autodetects', function()
+    H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
+      vim.g.alt_image = { protocol = 'auto' }
+      local m = require('alt-image')
+      assert.equals(require('alt-image.iterm2'), m._provider())
     end)
   end)
 

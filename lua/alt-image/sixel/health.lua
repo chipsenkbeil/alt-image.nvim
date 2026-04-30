@@ -13,8 +13,8 @@ function M.check()
          .. (msg or 'Detection failed. Try a sixel-capable terminal '
                  .. '(Windows Terminal, iTerm.app, WezTerm, foot, mlterm, '
                  .. 'contour, xterm with +sixel build), '
-                 .. 'or set TERM=xterm-sixel, or call '
-                 .. 'require("alt-image").setup({ protocol = "sixel" }) to force.'))
+                 .. 'or set TERM=xterm-sixel, or set '
+                 .. 'vim.g.alt_image = { protocol = "sixel" } to force.'))
   end
 
   if vim.env.TERM_PROGRAM == 'Apple_Terminal' then

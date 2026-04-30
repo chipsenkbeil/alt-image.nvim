@@ -3,6 +3,16 @@
 -- supports and exposes the same set/get/del/_supported surface so that
 --   vim.ui.img = require('alt-image')
 -- works identically to vim.ui.img on a kitty-supporting terminal.
+--
+-- Configuration is read from `vim.g.alt_image` at call-time:
+--
+--   vim.g.alt_image = {
+--     protocol = 'auto',     -- 'iterm2' | 'sixel' | 'auto' (default)
+--     accelerate = true,     -- use img2sixel / convert when present (default true)
+--   }
+--
+-- Reading at call-time means callers can set `vim.g.alt_image` after
+-- `require('alt-image')` and still see the effect.
 
 local M = {}
 
@@ -14,15 +24,32 @@ local PROVIDERS = {
 local DETECT_ORDER = { 'iterm2', 'sixel' }
 
 local cached_provider = nil
-local user_choice = nil
 
--- Public runtime config. Read by encoder dispatchers in `_sixel_encode` and
--- crop helpers in `sixel.lua` / `iterm2.lua`. Defaults: acceleration on.
-M._config = { accelerate = true }
+-- ---------------------------------------------------------------------------
+-- Config helpers (read vim.g.alt_image at call-time).
+-- ---------------------------------------------------------------------------
+
+local function user_protocol()
+  local g = vim.g.alt_image or {}
+  return g.protocol
+end
+
+local function accel_enabled()
+  local g = vim.g.alt_image or {}
+  if g.accelerate == nil then return true end  -- default
+  return g.accelerate and true or false
+end
+
+-- Exposed for other modules (sixel encoder, health) to read.
+M._accel_enabled = accel_enabled
 
 local function detect()
-  if user_choice then
-    return PROVIDERS[user_choice]()
+  local proto = user_protocol()
+  if proto and proto ~= 'auto' then
+    if not PROVIDERS[proto] then
+      error('alt-image: unknown protocol ' .. tostring(proto))
+    end
+    return PROVIDERS[proto]()
   end
   for _, name in ipairs(DETECT_ORDER) do
     local p = PROVIDERS[name]()
@@ -32,7 +59,7 @@ local function detect()
   end
   error('alt-image: no supported image protocol detected. '
      .. 'Set vim.ui.img = require("alt-image.iterm2") or .sixel manually, '
-     .. 'or call require("alt-image").setup({ protocol = ... }).')
+     .. 'or set vim.g.alt_image = { protocol = "iterm2" } (or "sixel").')
 end
 
 function M._provider()
@@ -40,18 +67,10 @@ function M._provider()
   return cached_provider
 end
 
-function M.setup(opts)
-  opts = opts or {}
-  if opts.protocol then
-    if not PROVIDERS[opts.protocol] then
-      error('alt-image: unknown protocol ' .. tostring(opts.protocol))
-    end
-    user_choice = opts.protocol
-    cached_provider = PROVIDERS[user_choice]()
-  end
-  if opts.accelerate ~= nil then
-    M._config.accelerate = opts.accelerate and true or false
-  end
+-- Test helper: clear the cached provider so a subsequent _provider() call
+-- redetects from current env / vim.g.alt_image.
+function M._reset_provider_cache()
+  cached_provider = nil
 end
 
 -- Forward the public API. We do this lazily so the provider isn't constructed
@@ -61,10 +80,12 @@ function M.get(id)   return M._provider().get(id)   end
 function M.del(id)   return M._provider().del(id)   end
 
 function M._supported(o)
-  if user_choice then
-    local ok, msg = PROVIDERS[user_choice]()._supported(o)
-    if ok then return true, user_choice .. ': ' .. (msg or '') end
-    return false, user_choice .. ': not supported'
+  local proto = user_protocol()
+  if proto and proto ~= 'auto' then
+    if not PROVIDERS[proto] then return false end
+    local ok, msg = PROVIDERS[proto]()._supported(o)
+    if ok then return true, proto .. ': ' .. (msg or '') end
+    return false, proto .. ': not supported'
   end
   for _, name in ipairs(DETECT_ORDER) do
     local p = PROVIDERS[name]()

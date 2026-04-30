@@ -1,22 +1,27 @@
 -- test/run.lua: in-repo busted-style harness. Run with:
 --   nvim --headless --noplugin -l test/run.lua
-local M = { suites = {}, current = nil, before = nil, passed = 0, failed = 0 }
+local M = { suites = {}, current = nil, before = nil, after = nil,
+            passed = 0, failed = 0 }
 
 function _G.describe(name, fn)
-  local saved = { suite = M.current, before = M.before }
+  local saved = { suite = M.current, before = M.before, after = M.after }
   M.current = { name = name, tests = {} }
   M.before = nil
+  M.after = nil
   fn()
   table.insert(M.suites, M.current)
   M.current = saved.suite
   M.before = saved.before
+  M.after = saved.after
 end
 
 function _G.it(name, fn)
-  table.insert(M.current.tests, { name = name, fn = fn, before = M.before })
+  table.insert(M.current.tests, { name = name, fn = fn,
+                                  before = M.before, after = M.after })
 end
 
 function _G.before_each(fn) M.before = fn end
+function _G.after_each(fn)  M.after  = fn end
 
 local function deep_eq(a, b) return vim.deep_equal(a, b) end
 
@@ -85,6 +90,7 @@ for _, suite in ipairs(M.suites) do
       print('         ' .. tostring(before_err):gsub('\n', '\n         '))
     else
       local ok, err = pcall(t.fn)
+      if t.after then pcall(t.after) end
       if ok then
         M.passed = M.passed + 1
         print('  ok   - ' .. t.name)
