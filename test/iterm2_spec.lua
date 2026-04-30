@@ -62,3 +62,31 @@ describe('alt-image.iterm2 del(math.huge)', function()
     assert.is_false(img.del(math.huge))  -- nothing left
   end)
 end)
+
+describe('alt-image.iterm2 _supported', function()
+  before_each(function()
+    package.loaded['alt-image.iterm2'] = nil
+  end)
+
+  it('returns true via TERM_PROGRAM=iTerm.app fast path', function()
+    H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
+      local img = require('alt-image.iterm2')
+      assert.is_true(img._supported())
+    end)
+  end)
+
+  it('returns true via TERM_PROGRAM=WezTerm', function()
+    H.with_env({ TERM_PROGRAM = 'WezTerm' }, function()
+      local img = require('alt-image.iterm2')
+      assert.is_true(img._supported())
+    end)
+  end)
+
+  it('returns false on unknown TERM_PROGRAM with no probe response', function()
+    H.with_env({ TERM_PROGRAM = 'XYZ' }, function()
+      local img = require('alt-image.iterm2')
+      local ok, _ = img._supported({ timeout = 10 })
+      assert.is_false(ok)
+    end)
+  end)
+end)

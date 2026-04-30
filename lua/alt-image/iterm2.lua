@@ -10,6 +10,11 @@ local M = {}
 local SYNC_START = '\027[?2026h'
 local SYNC_END   = '\027[?2026l'
 
+local FAST_TERM_PROGRAMS = {
+  ['iTerm.app'] = true,
+  ['WezTerm']   = true,
+}
+
 -- Per-id placement state. state[id] = { data = bytes, opts = canonical_opts }
 local state = {}
 local next_id = 1
@@ -98,9 +103,25 @@ function M.del(id)
   return true
 end
 
-function M._supported(_opts)
-  -- placeholder; real implementation in Task 7
-  return false
+function M._supported(opts)
+  opts = opts or {}
+  local tp = vim.env.TERM_PROGRAM
+  if tp and FAST_TERM_PROGRAMS[tp] then
+    return true, 'TERM_PROGRAM=' .. tp
+  end
+
+  -- Probe via XTVERSION (CSI > q). Polyfilled util returns nil if not
+  -- supported on this Neovim build, in which case we default to false.
+  local done, ok, msg = false, false, nil
+  util.query_csi('\027[>q', { timeout = opts.timeout or 1000 }, function(resp)
+    if resp and (resp:find('iTerm2', 1, true)
+              or resp:find('WezTerm', 1, true)) then
+      ok, msg = true, resp
+    end
+    done = true
+  end)
+  vim.wait((opts.timeout or 1000) + 100, function() return done end)
+  return ok, msg
 end
 
 return M
