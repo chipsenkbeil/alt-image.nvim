@@ -64,17 +64,19 @@ end
 -- Reset all alt-image module loads and require the named provider fresh.
 -- Use in spec before_each blocks to avoid stale state across tests.
 --
--- Acceleration (img2sixel / convert) is disabled here so existing specs
--- that inspect raw sixel/PNG bytes stay deterministic regardless of which
--- external tools happen to be installed on the test host. The dedicated
--- `accel_spec.lua` opts back in explicitly.
+-- External tools (img2sixel / magick / convert) are disabled here so existing
+-- specs that inspect raw sixel/PNG bytes stay deterministic regardless of
+-- which external tools happen to be installed on the test host. The dedicated
+-- external-tools spec opts back in explicitly.
 function H.fresh_provider(name)
   package.loaded['alt-image']           = nil
   package.loaded['alt-image.iterm2']    = nil
   package.loaded['alt-image.sixel']     = nil
   package.loaded['alt-image._render']   = nil
   package.loaded['alt-image._carrier']  = nil
-  vim.g.alt_image = { accelerate = false }   -- pure-Lua paths for byte-inspecting tests
+  package.loaded['alt-image._magick']   = nil
+  package.loaded['alt-image._libsixel'] = nil
+  vim.g.alt_image = { magick = false, img2sixel = false }   -- pure-Lua paths
   pcall(function() require('alt-image._util')._reset_executable_cache() end)
   return require('alt-image.' .. name)
 end

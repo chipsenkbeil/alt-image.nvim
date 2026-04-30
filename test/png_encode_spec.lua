@@ -54,4 +54,23 @@ describe('_png_encode.encode', function()
     local img = png.decode(encoded)
     assert.equals(rgba, img.pixels)
   end)
+
+  it('produces compressed output when libz is available', function()
+    local rgba = string.rep(string.char(255, 0, 0, 255), 64 * 64)
+    local encoded = png_encode.encode(rgba, 64, 64)
+    local raw_size = 64 * 64 * 4 + 64  -- pixels + filter bytes
+    if png_encode.has_libz() then
+      -- A solid-red 64x64 image should compress dramatically.
+      assert.is_true(#encoded < raw_size / 10,
+        'expected significant compression; got ' .. #encoded .. ' bytes')
+    else
+      -- Stored-blocks fallback: roughly raw size + zlib/PNG overhead.
+      assert.is_true(#encoded > raw_size, 'fallback should be larger than raw')
+    end
+    -- Round-trip works either way.
+    local img = png.decode(encoded)
+    assert.equals(64, img.width)
+    assert.equals(64, img.height)
+    assert.equals(rgba, img.pixels)
+  end)
 end)

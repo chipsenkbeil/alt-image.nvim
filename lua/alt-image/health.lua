@@ -27,21 +27,28 @@ function M.check()
         .. 'of alt-image.nvim. Images may not render. Tracked in README.')
   end
 
-  -- Acceleration tooling
-  local util = require('alt-image._util')
-  local g = vim.g.alt_image or {}
-  local accel = (g.accelerate ~= false)
-  h.info('Acceleration: ' .. (accel and 'enabled' or 'disabled')
-      .. ' (set vim.g.alt_image = { accelerate = false } to disable)')
-  if util.have_img2sixel() then
-    h.ok('img2sixel detected — sixel encoding accelerated')
+  -- External tooling
+  local magick   = require('alt-image._magick').binary()
+  local libsixel = require('alt-image._libsixel').binary()
+  if magick then
+    h.ok('ImageMagick: ' .. magick)
   else
-    h.info('img2sixel not found — falling back to convert or pure Lua')
+    h.info('ImageMagick: not found '
+        .. '(set vim.g.alt_image.magick or install magick/convert)')
   end
-  if util.have_convert() then
-    h.ok('convert (ImageMagick) detected — used for cropping and sixel fallback')
+  if libsixel then
+    h.ok('libsixel: ' .. libsixel)
   else
-    h.info('convert not found — using pure Lua for cropping and PNG encode')
+    h.info('libsixel: not found '
+        .. '(set vim.g.alt_image.img2sixel or install)')
+  end
+
+  -- PNG encoder compression status
+  local png_encode = require('alt-image._png_encode')
+  if png_encode.has_libz() then
+    h.ok('PNG encoder: libz DEFLATE compression active')
+  else
+    h.info('PNG encoder: libz not found, falling back to stored zlib blocks')
   end
 end
 

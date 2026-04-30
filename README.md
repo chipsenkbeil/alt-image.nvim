@@ -12,10 +12,7 @@ vim.ui.img = require('alt-image.iterm2')   -- iTerm2 / WezTerm (OSC 1337)
 vim.ui.img = require('alt-image.sixel')    -- foot, mlterm, xterm +sixel, etc.
 ```
 
-After installation, `vim.ui.img` works the same as on a kitty-capable
-terminal — same `set` / `get` / `del` / `_supported` surface, same opts
-(`row`, `col`, `width`, `height`, `zindex`, `relative` ∈ `ui|editor|buffer`,
-`buf`, `pad`).
+After installation, `vim.ui.img` works the same as on a kitty-capable terminal.
 
 ### Configuration
 
@@ -26,9 +23,13 @@ either before or after `require('alt-image')`):
 vim.g.alt_image = {
   -- Force a specific protocol ('iterm2' / 'sixel' / 'auto'). Default: 'auto'.
   protocol = 'auto',
-  -- Use img2sixel / convert (ImageMagick) when present for faster encoding
-  -- and cropping. Falls back to pure Lua. Default: true.
-  accelerate = true,
+  -- ImageMagick binary used for fast crop + sixel/PNG re-encode. Accepts a
+  -- string (path or PATH-resolvable name), or `false` to disable. When unset,
+  -- alt-image auto-detects: `magick` first, then `convert`.
+  magick = 'magick',
+  -- libsixel's `img2sixel` binary, used for fast sixel encoding. Same shape:
+  -- string | false | unset (auto-detect `img2sixel`).
+  img2sixel = 'img2sixel',
 }
 ```
 

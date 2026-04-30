@@ -404,82 +404,52 @@ M.quantize     = _quantize
 M.encode_sixel = _encode_sixel
 
 -- ---------------------------------------------------------------------------
--- Acceleration dispatchers
+-- External-tool dispatchers
 -- ---------------------------------------------------------------------------
 --
--- These wrap the pure-Lua paths above with an optional external-tool fast
--- path. The tools take PNG input on stdin, so callers that already have raw
--- RGBA must pay a single PNG re-encode hop. For the (much more common) crop
--- case we expose a separate dispatcher that hands the *original* PNG bytes
--- straight to `convert -crop` and avoids the decode -> crop -> re-encode
--- round-trip entirely.
+-- These wrap the pure-Lua paths above with optional external-tool fast paths
+-- via the `_magick` and `_libsixel` modules. The tools take PNG input on
+-- stdin, so callers that already have raw RGBA must pay a single PNG
+-- re-encode hop. For the (much more common) crop case the magick wrapper
+-- accepts the *original* PNG bytes and runs `<bin> -crop` directly, skipping
+-- the decode -> crop -> re-encode round-trip.
 --
--- Dispatchers read `vim.g.alt_image.accelerate` directly at call-time so
--- toggles take effect without re-requiring, and there's no module cycle.
+-- Each call resolves the binary at call-time via the wrapper's `binary()`
+-- helpers, so toggling `vim.g.alt_image.{magick,img2sixel}` takes effect
+-- without re-requiring this module.
 
-local _util = require('alt-image._util')
-
-local function _accelerate_enabled()
-  local g = vim.g.alt_image or {}
-  if g.accelerate == nil then return true end
-  return g.accelerate and true or false
-end
-
----Run a subprocess synchronously and return stdout on success, nil on fail.
----@param cmd string[]
----@param stdin string
----@return string? stdout
-local function _run(cmd, stdin)
-  local ok, res = pcall(function()
-    return vim.system(cmd, { stdin = stdin, text = false }):wait()
-  end)
-  if not ok or not res or res.code ~= 0 then
-    -- Surface the subprocess error once per (tool, message) pair so the user
-    -- can diagnose ImageMagick policy errors etc. without spamming.
-    if res and res.stderr and #res.stderr > 0 then
-      vim.schedule(function()
-        vim.notify_once(
-          ('alt-image: %s failed: %s'):format(cmd[1], res.stderr),
-          vim.log.levels.DEBUG
-        )
-      end)
-    end
-    return nil
-  end
-  return res.stdout
-end
-
----Encode an RGBA buffer to a sixel DCS string, accelerated if possible.
----Priority: img2sixel -> convert -> pure Lua.
+---Encode an RGBA buffer to a sixel DCS string, using external tools when
+---configured. Priority: img2sixel -> magick/convert -> pure Lua.
 ---@param rgba string
 ---@param w_px integer
 ---@param h_px integer
 ---@return string sixel DCS
 function M.encode_sixel_dispatch(rgba, w_px, h_px)
-  if _accelerate_enabled() then
-    -- Both tools want PNG on stdin; encode once and try each tool.
-    local png_bytes
-    if _util.have_img2sixel() or _util.have_convert() then
-      local png_encode = require('alt-image._png_encode')
-      png_bytes = png_encode.encode(rgba, w_px, h_px)
-    end
-    if _util.have_img2sixel() and png_bytes then
-      local out = _run({ 'img2sixel' }, png_bytes)
-      if out and #out > 0 then return out end
-    end
-    if _util.have_convert() and png_bytes then
-      local out = _run(
-        { 'convert', '-', '-define', 'sixel:colors=256', 'sixel:-' },
-        png_bytes)
-      if out and #out > 0 then return out end
-    end
+  local magick   = require('alt-image._magick')
+  local libsixel = require('alt-image._libsixel')
+  local has_libsixel = libsixel.binary() ~= nil
+  local has_magick   = magick.binary() ~= nil
+
+  -- Both external tools want PNG on stdin; encode once and try each in turn.
+  local png_bytes
+  if has_libsixel or has_magick then
+    local png_encode = require('alt-image._png_encode')
+    png_bytes = png_encode.encode(rgba, w_px, h_px)
+  end
+  if has_libsixel and png_bytes then
+    local out = libsixel.encode_sixel(png_bytes)
+    if out and #out > 0 then return out end
+  end
+  if has_magick and png_bytes then
+    local out = magick.encode_sixel_from_png(png_bytes)
+    if out and #out > 0 then return out end
   end
   return _encode_sixel(rgba, w_px, h_px)
 end
 
----Combined crop + sixel-encode using `convert` in a single call.
----Returns nil if accel is disabled, `convert` is missing, or the subprocess
----fails — caller must fall back to its existing decode -> crop -> encode path.
+---Combined crop + sixel-encode using ImageMagick in a single call.
+---Returns nil if magick is disabled / missing, or the subprocess fails —
+---caller must fall back to its existing decode -> crop -> encode path.
 ---@param png_bytes string original PNG bytes
 ---@param x_px integer crop x offset (px)
 ---@param y_px integer crop y offset (px)
@@ -487,15 +457,11 @@ end
 ---@param h_px integer crop height (px)
 ---@return string? sixel
 function M.crop_and_encode_sixel(png_bytes, x_px, y_px, w_px, h_px)
-  if not _accelerate_enabled() then return nil end
-  if not _util.have_convert() then return nil end
-  local geom = string.format('%dx%d+%d+%d', w_px, h_px, x_px, y_px)
-  return _run(
-    { 'convert', '-', '-crop', geom, '-define', 'sixel:colors=256', 'sixel:-' },
-    png_bytes)
+  return require('alt-image._magick').crop_to_sixel(
+    png_bytes, x_px, y_px, w_px, h_px)
 end
 
----Combined crop + PNG re-encode using `convert`. Returns nil on failure so
+---Combined crop + PNG re-encode using ImageMagick. Returns nil on failure so
 ---the caller can fall back to pure-Lua crop + `_png_encode.encode`.
 ---@param png_bytes string original PNG bytes
 ---@param x_px integer
@@ -504,10 +470,8 @@ end
 ---@param h_px integer
 ---@return string? png
 function M.crop_and_encode_png(png_bytes, x_px, y_px, w_px, h_px)
-  if not _accelerate_enabled() then return nil end
-  if not _util.have_convert() then return nil end
-  local geom = string.format('%dx%d+%d+%d', w_px, h_px, x_px, y_px)
-  return _run({ 'convert', '-', '-crop', geom, 'png:-' }, png_bytes)
+  return require('alt-image._magick').crop_to_png(
+    png_bytes, x_px, y_px, w_px, h_px)
 end
 
 return M

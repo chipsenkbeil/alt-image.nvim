@@ -198,16 +198,15 @@ function M.query_cell_size()
   })
 end
 
--- Cached executable lookups for external acceleration tools.
+-- Cached executable lookups for external tools (magick, convert, img2sixel).
 -- The cache survives the life of the Neovim session; tests that mock
--- `vim.fn.executable` should reload the module via `package.loaded` to
--- bypass it.
+-- `vim.fn.executable` call `_reset_executable_cache()` to invalidate it.
 local _executable_cache = {}
 
 ---Return true if `name` is on $PATH, caching the result.
 ---@param name string
 ---@return boolean
-local function executable(name)
+function M._executable(name)
   if _executable_cache[name] == nil then
     _executable_cache[name] = vim.fn.executable(name) == 1
   end
@@ -218,14 +217,6 @@ end
 function M._reset_executable_cache()
   for k in pairs(_executable_cache) do _executable_cache[k] = nil end
 end
-
----Whether the libsixel `img2sixel` tool is available on $PATH.
----@return boolean
-function M.have_img2sixel() return executable('img2sixel') end
-
----Whether the ImageMagick `convert` tool is available on $PATH.
----@return boolean
-function M.have_convert()   return executable('convert')   end
 
 M.generate_id = (function()
   local bit = require('bit')

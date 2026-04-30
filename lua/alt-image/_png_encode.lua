@@ -1,17 +1,17 @@
 -- alt-image PNG encoder (pure transforms).
--- Emits a valid 8-bit RGBA PNG using zlib stored (uncompressed) blocks.
--- This trades wire size for ~150 LOC of encoder vs ~600 for full DEFLATE;
--- terminals don't care about wire size and base64 already adds 33% overhead.
+-- Emits a valid 8-bit RGBA PNG. When LuaJIT FFI + libz are available we run
+-- payloads through zlib's `compress2` for real DEFLATE compression; otherwise
+-- we fall back to zlib stored (uncompressed) blocks. The fallback path keeps
+-- the encoder usable on hosts without libz, at the cost of larger wire size.
 --
 -- PNG layout:
 --   8-byte signature, then chunks: IHDR, IDAT, IEND.
 --   Each chunk: 4-byte BE length, 4-byte type, length-byte data, 4-byte BE CRC32
 --   computed over (type + data).
 --
--- IDAT contents are zlib-compressed scanlines. Each scanline is one filter byte
--- (0 = "None") followed by width*4 RGBA bytes. We emit zlib stored blocks
--- (BTYPE=00) chunked at 65535 bytes max payload, with a single Adler-32 over
--- the full uncompressed payload.
+-- IDAT contents are a zlib stream (header + DEFLATE blocks + Adler-32) over
+-- filtered scanlines. Each scanline is one filter byte (0 = "None") followed
+-- by width*4 RGBA bytes.
 
 local M = {}
 
@@ -107,6 +107,58 @@ local function zlib_store(raw)
   return table.concat(parts)
 end
 
+-- Try to load libz via LuaJIT FFI. On success, `libz_compress(data, level)`
+-- returns a complete zlib stream (header + DEFLATE + Adler-32) suitable for
+-- direct use as IDAT contents. On any failure (no FFI, no libz on the loader
+-- path, ABI mismatch, runtime error) we leave it nil and fall through to the
+-- pure-Lua stored-block encoder.
+local libz_compress  -- function(data, level) -> string|nil
+
+local _libz_ok = pcall(function()
+  local ffi = require('ffi')
+  ffi.cdef[[
+    typedef unsigned long alt_image_uLongf;
+    int compress2(uint8_t *dest, alt_image_uLongf *destLen,
+                  const uint8_t *source, alt_image_uLongf sourceLen, int level);
+  ]]
+  local libz = ffi.load('z')
+
+  libz_compress = function(data, level)
+    local src_len = #data
+    -- compress2 docs: dest buffer must be at least sourceLen +
+    -- sourceLen/1000 + 12 bytes; we pad an extra 32 for the zlib header / safety.
+    local dst_capacity = src_len + math.ceil(src_len / 1000) + 32
+    local dst = ffi.new('uint8_t[?]', dst_capacity)
+    local dst_len = ffi.new('alt_image_uLongf[1]', dst_capacity)
+    local src = ffi.cast('const uint8_t*', data)
+    local rc = libz.compress2(dst, dst_len, src, src_len, level or 6)
+    if rc ~= 0 then return nil end
+    return ffi.string(dst, dst_len[0])
+  end
+end)
+
+if not _libz_ok then libz_compress = nil end
+
+---Compress raw bytes using libz when available, falling back to a pure-Lua
+---stored-block zlib stream. Either way the return value is a valid zlib stream
+---ready to drop into a PNG IDAT chunk.
+---@param raw string uncompressed data
+---@return string zlib_bytes
+local function zlib_compress(raw)
+  if libz_compress then
+    local out = libz_compress(raw)
+    if out and #out > 0 then return out end
+  end
+  return zlib_store(raw)
+end
+
+---Whether the FFI libz path is active. Useful for healthchecks and tests
+---that want to assert "real" DEFLATE compression vs the fallback.
+---@return boolean
+function M.has_libz()
+  return libz_compress ~= nil
+end
+
 ---Encode an 8-bit RGBA pixel buffer as a PNG byte string.
 ---@param rgba string raw RGBA bytes (4 bytes/pixel, row-major), length = width*height*4
 ---@param width integer
@@ -125,7 +177,7 @@ function M.encode(rgba, width, height)
     scanlines[#scanlines + 1] = '\0' .. rgba:sub(y * stride + 1, (y + 1) * stride)
   end
   local raw = table.concat(scanlines)
-  local idat_payload = zlib_store(raw)
+  local idat_payload = zlib_compress(raw)
 
   local ihdr_data = be32(width) .. be32(height)
                   .. string.char(8, 6, 0, 0, 0)  -- depth=8, color=RGBA, defaults

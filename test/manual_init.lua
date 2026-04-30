@@ -153,18 +153,23 @@ vim.api.nvim_create_user_command('AltImageInfo', function()
   table.insert(lines, string.format('  sixel._supported()  = %s, %s',
     tostring(s_ok), s_msg or 'no message'))
 
-  -- External-tool acceleration status
-  local util = require('alt-image._util')
-  local g = vim.g.alt_image or {}
-  local accel = (g.accelerate ~= false)
+  -- External tools + PNG compression status
+  local g          = vim.g.alt_image or {}
+  local magick     = require('alt-image._magick').binary()
+  local libsixel   = require('alt-image._libsixel').binary()
+  local png_encode = require('alt-image._png_encode')
   table.insert(lines, '')
-  table.insert(lines, 'Acceleration:')
-  table.insert(lines, string.format('  accelerate     = %s',
-    tostring(accel)))
-  table.insert(lines, string.format('  img2sixel      = %s',
-    util.have_img2sixel() and 'detected' or 'not found'))
-  table.insert(lines, string.format('  convert        = %s',
-    util.have_convert() and 'detected' or 'not found'))
+  table.insert(lines, 'External tools:')
+  table.insert(lines, string.format('  vim.g.alt_image.magick    = %s',
+    vim.inspect(g.magick)))
+  table.insert(lines, string.format('  vim.g.alt_image.img2sixel = %s',
+    vim.inspect(g.img2sixel)))
+  table.insert(lines, string.format('  resolved magick           = %s',
+    magick or 'not used'))
+  table.insert(lines, string.format('  resolved img2sixel        = %s',
+    libsixel or 'not used'))
+  table.insert(lines, string.format('  PNG libz compression      = %s',
+    png_encode.has_libz() and 'active' or 'fallback (stored blocks)'))
 
   for _, l in ipairs(lines) do print(l) end
 end, {})

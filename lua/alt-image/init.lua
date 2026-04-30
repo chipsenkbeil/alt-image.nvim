@@ -7,8 +7,9 @@
 -- Configuration is read from `vim.g.alt_image` at call-time:
 --
 --   vim.g.alt_image = {
---     protocol = 'auto',     -- 'iterm2' | 'sixel' | 'auto' (default)
---     accelerate = true,     -- use img2sixel / convert when present (default true)
+--     protocol  = 'auto',     -- 'iterm2' | 'sixel' | 'auto' (default)
+--     magick    = 'magick',   -- string | false. nil/unset = auto-detect.
+--     img2sixel = 'img2sixel',-- string | false. nil/unset = auto-detect.
 --   }
 --
 -- Reading at call-time means callers can set `vim.g.alt_image` after
@@ -33,15 +34,6 @@ local function user_protocol()
   local g = vim.g.alt_image or {}
   return g.protocol
 end
-
-local function accel_enabled()
-  local g = vim.g.alt_image or {}
-  if g.accelerate == nil then return true end  -- default
-  return g.accelerate and true or false
-end
-
--- Exposed for other modules (sixel encoder, health) to read.
-M._accel_enabled = accel_enabled
 
 local function detect()
   local proto = user_protocol()

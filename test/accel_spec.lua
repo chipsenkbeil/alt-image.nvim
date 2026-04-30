@@ -1,5 +1,6 @@
 -- test/accel_spec.lua
--- Tests for the external-tool acceleration dispatchers in _sixel_encode.lua.
+-- Tests for the external-tool dispatchers in _sixel_encode.lua, plus the
+-- vim.g.alt_image.magick / img2sixel binary-resolution semantics.
 -- We mock vim.system + vim.fn.executable so no real subprocess ever runs.
 
 local H = require('test.helpers')
@@ -7,10 +8,10 @@ local H = require('test.helpers')
 -- Stand up a controlled environment for one test:
 -- - executable_for: { [name]=true|false } overrides for vim.fn.executable
 -- - system_handler: function(cmd, opts) -> { code, stdout } (or nil to error)
--- - accelerate:     boolean for vim.g.alt_image.accelerate
+-- - g_alt_image:    table assigned to vim.g.alt_image
 -- Returns the fresh _sixel_encode module + a `calls` array recording each
 -- vim.system invocation as { cmd = {...}, opts = {...} }.
-local function with_mocks(executable_for, system_handler, accelerate)
+local function with_mocks(executable_for, system_handler, g_alt_image)
   local saved_system     = vim.system
   local saved_executable = vim.fn.executable
   local saved_g          = vim.g.alt_image
@@ -31,12 +32,14 @@ local function with_mocks(executable_for, system_handler, accelerate)
   end
 
   -- Force fresh module loads so the mocks take effect through cached
-  -- requires inside the dispatcher.
+  -- requires inside the dispatchers.
   package.loaded['alt-image']               = nil
   package.loaded['alt-image._util']         = nil
   package.loaded['alt-image._sixel_encode'] = nil
   package.loaded['alt-image._png_encode']   = nil
-  vim.g.alt_image = { accelerate = accelerate }
+  package.loaded['alt-image._magick']       = nil
+  package.loaded['alt-image._libsixel']     = nil
+  vim.g.alt_image = g_alt_image
   local senc = require('alt-image._sixel_encode')
   -- Belt-and-suspenders: clear the executable cache.
   require('alt-image._util')._reset_executable_cache()
@@ -48,15 +51,161 @@ local function with_mocks(executable_for, system_handler, accelerate)
   end
 end
 
+describe('_magick.binary()', function()
+  local function fresh_magick(executable_for, g_alt_image)
+    package.loaded['alt-image._util']   = nil
+    package.loaded['alt-image._magick'] = nil
+    local saved_executable = vim.fn.executable
+    local saved_g          = vim.g.alt_image
+    vim.fn.executable = function(name)
+      local v = executable_for[name]
+      if v == true  then return 1 end
+      if v == false then return 0 end
+      return saved_executable(name)
+    end
+    vim.g.alt_image = g_alt_image
+    require('alt-image._util')._reset_executable_cache()
+    return require('alt-image._magick'), function()
+      vim.fn.executable = saved_executable
+      vim.g.alt_image   = saved_g
+    end
+  end
+
+  it('returns nil when magick = false', function()
+    local m, restore = fresh_magick({ magick = true, convert = true },
+                                    { magick = false })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('uses the configured string when executable', function()
+    local m, restore = fresh_magick({ magick = true }, { magick = 'magick' })
+    local ok, err = pcall(function()
+      assert.equals('magick', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil when configured string is not executable', function()
+    local m, restore = fresh_magick({ ['gm-bogus'] = false },
+                                    { magick = 'gm-bogus' })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('auto-detects magick first when nil/unset', function()
+    local m, restore = fresh_magick({ magick = true, convert = true }, {})
+    local ok, err = pcall(function()
+      assert.equals('magick', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('falls back to convert when magick is missing', function()
+    local m, restore = fresh_magick({ magick = false, convert = true }, {})
+    local ok, err = pcall(function()
+      assert.equals('convert', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil when neither magick nor convert is on PATH', function()
+    local m, restore = fresh_magick({ magick = false, convert = false }, {})
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+end)
+
+describe('_libsixel.binary()', function()
+  local function fresh_libsixel(executable_for, g_alt_image)
+    package.loaded['alt-image._util']     = nil
+    package.loaded['alt-image._libsixel'] = nil
+    local saved_executable = vim.fn.executable
+    local saved_g          = vim.g.alt_image
+    vim.fn.executable = function(name)
+      local v = executable_for[name]
+      if v == true  then return 1 end
+      if v == false then return 0 end
+      return saved_executable(name)
+    end
+    vim.g.alt_image = g_alt_image
+    require('alt-image._util')._reset_executable_cache()
+    return require('alt-image._libsixel'), function()
+      vim.fn.executable = saved_executable
+      vim.g.alt_image   = saved_g
+    end
+  end
+
+  it('returns nil when img2sixel = false', function()
+    local m, restore = fresh_libsixel({ img2sixel = true },
+                                      { img2sixel = false })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('uses the configured string when executable', function()
+    local m, restore = fresh_libsixel({ img2sixel = true },
+                                      { img2sixel = 'img2sixel' })
+    local ok, err = pcall(function()
+      assert.equals('img2sixel', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil when configured string is not executable', function()
+    local m, restore = fresh_libsixel({ ['notreal'] = false },
+                                      { img2sixel = 'notreal' })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('auto-detects img2sixel when nil/unset', function()
+    local m, restore = fresh_libsixel({ img2sixel = true }, {})
+    local ok, err = pcall(function()
+      assert.equals('img2sixel', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil when img2sixel is not on PATH', function()
+    local m, restore = fresh_libsixel({ img2sixel = false }, {})
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+end)
+
 describe('encode_sixel_dispatch', function()
   -- A trivial 1x1 fully-opaque red RGBA pixel.
   local rgba = string.char(255, 0, 0, 255)
 
-  it('uses img2sixel when available and accelerate=true', function()
+  it('uses img2sixel when configured and available', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = true, convert = false },
+      { img2sixel = true, magick = false, convert = false },
       function() return { code = 0, stdout = 'FAKE_SIXEL_FROM_IMG2SIXEL' } end,
-      true)
+      { magick = false, img2sixel = 'img2sixel' })
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
       assert.equals('FAKE_SIXEL_FROM_IMG2SIXEL', out)
@@ -67,11 +216,26 @@ describe('encode_sixel_dispatch', function()
     if not ok then error(err, 0) end
   end)
 
-  it('falls through to convert when img2sixel is absent', function()
+  it('falls through to magick when img2sixel is disabled', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = false, convert = true },
+      { img2sixel = true, magick = true },
+      function() return { code = 0, stdout = 'FAKE_SIXEL_FROM_MAGICK' } end,
+      { img2sixel = false, magick = 'magick' })
+    local ok, err = pcall(function()
+      local out = senc.encode_sixel_dispatch(rgba, 1, 1)
+      assert.equals('FAKE_SIXEL_FROM_MAGICK', out)
+      assert.equals(1, #calls)
+      assert.equals('magick', calls[1].cmd[1])
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('uses convert when configured', function()
+    local senc, calls, restore = with_mocks(
+      { img2sixel = false, magick = false, convert = true },
       function() return { code = 0, stdout = 'FAKE_SIXEL_FROM_CONVERT' } end,
-      true)
+      { img2sixel = false, magick = 'convert' })
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
       assert.equals('FAKE_SIXEL_FROM_CONVERT', out)
@@ -82,11 +246,11 @@ describe('encode_sixel_dispatch', function()
     if not ok then error(err, 0) end
   end)
 
-  it('uses pure Lua when accelerate=false', function()
+  it('uses pure Lua when both tools are disabled', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = true, convert = true },
+      { img2sixel = true, magick = true, convert = true },
       function() return { code = 0, stdout = 'SHOULD_NOT_BE_USED' } end,
-      false)
+      { img2sixel = false, magick = false })
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
       assert.equals(0, #calls)
@@ -97,20 +261,20 @@ describe('encode_sixel_dispatch', function()
     if not ok then error(err, 0) end
   end)
 
-  it('falls back to convert when img2sixel returns non-zero', function()
+  it('falls back to magick when img2sixel returns non-zero', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = true, convert = true },
+      { img2sixel = true, magick = true },
       function(cmd)
         if cmd[1] == 'img2sixel' then return { code = 1, stdout = '' } end
-        return { code = 0, stdout = 'FAKE_SIXEL_FROM_CONVERT' }
+        return { code = 0, stdout = 'FAKE_SIXEL_FROM_MAGICK' }
       end,
-      true)
+      { img2sixel = 'img2sixel', magick = 'magick' })
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
-      assert.equals('FAKE_SIXEL_FROM_CONVERT', out)
+      assert.equals('FAKE_SIXEL_FROM_MAGICK', out)
       assert.equals(2, #calls)
       assert.equals('img2sixel', calls[1].cmd[1])
-      assert.equals('convert',   calls[2].cmd[1])
+      assert.equals('magick',    calls[2].cmd[1])
     end)
     restore()
     if not ok then error(err, 0) end
@@ -118,9 +282,9 @@ describe('encode_sixel_dispatch', function()
 
   it('falls back to pure Lua when both tools fail', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = true, convert = true },
+      { img2sixel = true, magick = true },
       function() return { code = 1, stdout = '' } end,
-      true)
+      { img2sixel = 'img2sixel', magick = 'magick' })
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
       assert.equals(2, #calls)
@@ -132,9 +296,9 @@ describe('encode_sixel_dispatch', function()
 
   it('falls back to pure Lua when neither tool is installed', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = false, convert = false },
+      { img2sixel = false, magick = false, convert = false },
       function() return { code = 0, stdout = 'NEVER' } end,
-      true)
+      {})
     local ok, err = pcall(function()
       local out = senc.encode_sixel_dispatch(rgba, 1, 1)
       assert.equals(0, #calls)
@@ -148,17 +312,17 @@ end)
 describe('crop_and_encode_sixel', function()
   local png_bytes = 'FAKEPNG'
 
-  it('invokes convert with -crop geometry when accelerate=true', function()
+  it('invokes magick with -crop geometry when configured', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = false, convert = true },
+      { img2sixel = false, magick = true },
       function() return { code = 0, stdout = 'CROPPED_SIXEL' } end,
-      true)
+      { img2sixel = false, magick = 'magick' })
     local ok, err = pcall(function()
       local out = senc.crop_and_encode_sixel(png_bytes, 5, 7, 11, 13)
       assert.equals('CROPPED_SIXEL', out)
       assert.equals(1, #calls)
       local cmd = calls[1].cmd
-      assert.equals('convert', cmd[1])
+      assert.equals('magick', cmd[1])
       -- Expect -crop 11x13+5+7 somewhere in the arg list.
       local found = false
       for i = 1, #cmd - 1 do
@@ -170,11 +334,11 @@ describe('crop_and_encode_sixel', function()
     if not ok then error(err, 0) end
   end)
 
-  it('returns nil when accelerate=false (caller falls back)', function()
+  it('returns nil when magick = false (caller falls back)', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = true, convert = true },
+      { img2sixel = true, magick = true },
       function() return { code = 0, stdout = 'NEVER' } end,
-      false)
+      { img2sixel = false, magick = false })
     local ok, err = pcall(function()
       local out = senc.crop_and_encode_sixel(png_bytes, 0, 0, 1, 1)
       assert.is_nil(out)
@@ -184,11 +348,11 @@ describe('crop_and_encode_sixel', function()
     if not ok then error(err, 0) end
   end)
 
-  it('returns nil when convert is unavailable', function()
+  it('returns nil when magick is not installed', function()
     local senc, _, restore = with_mocks(
-      { img2sixel = true, convert = false },
+      { img2sixel = true, magick = false, convert = false },
       function() return { code = 0, stdout = 'NEVER' } end,
-      true)
+      {})
     local ok, err = pcall(function()
       local out = senc.crop_and_encode_sixel(png_bytes, 0, 0, 1, 1)
       assert.is_nil(out)
@@ -201,11 +365,11 @@ end)
 describe('crop_and_encode_png', function()
   local png_bytes = 'FAKEPNG'
 
-  it('invokes convert with png:- when accelerate=true', function()
+  it('invokes magick with png:- when configured', function()
     local senc, calls, restore = with_mocks(
-      { img2sixel = false, convert = true },
+      { img2sixel = false, magick = true },
       function() return { code = 0, stdout = 'CROPPED_PNG' } end,
-      true)
+      { img2sixel = false, magick = 'magick' })
     local ok, err = pcall(function()
       local out = senc.crop_and_encode_png(png_bytes, 1, 2, 3, 4)
       assert.equals('CROPPED_PNG', out)
@@ -218,11 +382,11 @@ describe('crop_and_encode_png', function()
     if not ok then error(err, 0) end
   end)
 
-  it('returns nil when accelerate=false', function()
+  it('returns nil when magick = false', function()
     local senc, _, restore = with_mocks(
-      { img2sixel = true, convert = true },
+      { img2sixel = true, magick = true },
       function() return { code = 0, stdout = 'NEVER' } end,
-      false)
+      { img2sixel = false, magick = false })
     local ok, err = pcall(function()
       assert.is_nil(senc.crop_and_encode_png(png_bytes, 0, 0, 1, 1))
     end)
@@ -233,9 +397,9 @@ end)
 
 -- Integration: a buffer-anchored placement gets cropped because its window is
 -- too short, the sixel provider's fast path detects PNG input + no resize
--- requested + convert available, and feeds the original PNG through
--- `convert -crop`. We assert the captured emit contains the canned bytes
--- returned by our mock convert.
+-- requested + magick available, and feeds the original PNG through
+-- `magick -crop`. We assert the captured emit contains the canned bytes
+-- returned by our mock.
 describe('accel-with-crop integration', function()
   local function read_fixture()
     local f = io.open('test/fixtures/4x4.png', 'rb')
@@ -243,21 +407,22 @@ describe('accel-with-crop integration', function()
     return b
   end
 
-  it('sixel provider routes a window-clipped placement through convert', function()
+  it('sixel provider routes a window-clipped placement through magick', function()
     local saved_system     = vim.system
     local saved_executable = vim.fn.executable
     local saved_g          = vim.g.alt_image
 
     vim.fn.executable = function(name)
+      if name == 'magick'    then return 1 end
       if name == 'convert'   then return 1 end
       if name == 'img2sixel' then return 0 end
       return saved_executable(name)
     end
-    local convert_calls = {}
+    local magick_calls = {}
     vim.system = function(cmd, opts)
-      table.insert(convert_calls, { cmd = cmd, opts = opts })
+      table.insert(magick_calls, { cmd = cmd, opts = opts })
       return { wait = function()
-        return { code = 0, stdout = 'CONVERT_SIXEL_BYTES' }
+        return { code = 0, stdout = 'MAGICK_SIXEL_BYTES' }
       end }
     end
 
@@ -266,10 +431,12 @@ describe('accel-with-crop integration', function()
     package.loaded['alt-image._util']         = nil
     package.loaded['alt-image._sixel_encode'] = nil
     package.loaded['alt-image._png_encode']   = nil
+    package.loaded['alt-image._magick']       = nil
+    package.loaded['alt-image._libsixel']     = nil
     package.loaded['alt-image.sixel']         = nil
     package.loaded['alt-image._render']       = nil
     package.loaded['alt-image._carrier']      = nil
-    vim.g.alt_image = { accelerate = true }
+    vim.g.alt_image = { magick = 'magick', img2sixel = false }
     require('alt-image._util')._reset_executable_cache()
 
     H.setup_capture()
@@ -287,17 +454,17 @@ describe('accel-with-crop integration', function()
                                           row = 1, col = 1,
                                           width = 4, height = 10 })
 
-    -- We expect convert to have been invoked at least once (either via the
+    -- We expect magick to have been invoked at least once (either via the
     -- combined crop+encode fast path, or via encode_sixel_dispatch on the
     -- already-cropped RGBA buffer).
-    local saw_convert = false
-    for _, call in ipairs(convert_calls) do
-      if call.cmd[1] == 'convert' then saw_convert = true; break end
+    local saw_magick = false
+    for _, call in ipairs(magick_calls) do
+      if call.cmd[1] == 'magick' then saw_magick = true; break end
     end
 
     -- Verify the captured emit contains our canned bytes.
     local cap = H.captured()
-    local saw_canned = cap:find('CONVERT_SIXEL_BYTES', 1, true) ~= nil
+    local saw_canned = cap:find('MAGICK_SIXEL_BYTES', 1, true) ~= nil
 
     img.del(id)
     vim.cmd('resize')
@@ -307,18 +474,19 @@ describe('accel-with-crop integration', function()
     vim.fn.executable = saved_executable
     vim.g.alt_image   = saved_g
 
-    assert.is_true(saw_convert, 'expected convert to be invoked')
+    assert.is_true(saw_magick, 'expected magick to be invoked')
     assert.is_true(saw_canned,
-      'expected captured emit to contain canned CONVERT_SIXEL_BYTES')
+      'expected captured emit to contain canned MAGICK_SIXEL_BYTES')
   end)
 end)
 
 -- After this spec finishes, restore deterministic defaults for any later
 -- specs that share the alt-image config.
 describe('accel cleanup', function()
-  it('leaves accelerate=false for subsequent specs', function()
-    vim.g.alt_image = { accelerate = false }
-    assert.equals(false, (vim.g.alt_image or {}).accelerate)
+  it('leaves magick=false, img2sixel=false for subsequent specs', function()
+    vim.g.alt_image = { magick = false, img2sixel = false }
+    assert.equals(false, (vim.g.alt_image or {}).magick)
+    assert.equals(false, (vim.g.alt_image or {}).img2sixel)
     -- Tag H so static analyzers don't flag the import as unused.
     _ = H
   end)
