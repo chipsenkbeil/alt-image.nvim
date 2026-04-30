@@ -119,41 +119,48 @@ local function resolve_screen_positions(c)
     local out = {}
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
+        -- Window inner bounds (1-indexed terminal cells).
+        local wpos        = vim.api.nvim_win_get_position(win)
+        local win_top     = wpos[1] + 1
+        local win_left    = wpos[2] + 1
+        local win_bottom  = win_top  + vim.api.nvim_win_get_height(win) - 1
+        local win_right   = win_left + vim.api.nvim_win_get_width(win)  - 1
+
+        -- Resolve the anchor's screen row, even when off-screen.
+        -- screenpos() returns row=0 when the anchor line is outside the
+        -- visible area; in that case we synthesize a virtual screen row from
+        -- the topmost visible buffer line so clipping math can crop the
+        -- image instead of dropping it entirely.
+        -- (Assumes one screen row per buffer line — wrapped lines are not
+        -- handled here, same caveat as the screenpos branch.)
+        local anchor_screen_row, anchor_screen_col
         local ok, sp = pcall(vim.fn.screenpos, win, line, col)
         if ok and sp and sp.row > 0 then
-          -- Image's intended footprint (1-indexed terminal cells).
-          -- The image goes in the virt_lines BELOW the anchor line, not on it.
-          -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
-          local image_top    = sp.row + 1
-          local image_left   = sp.col + pad
-          local image_bottom = image_top  + (c.opts.height or 1) - 1
-          local image_right  = image_left + (c.opts.width  or 1) - 1
-
-          -- Window inner bounds (1-indexed terminal cells).
-          local wpos        = vim.api.nvim_win_get_position(win)
-          local win_top     = wpos[1] + 1
-          local win_left    = wpos[2] + 1
-          local win_bottom  = win_top  + vim.api.nvim_win_get_height(win) - 1
-          local win_right   = win_left + vim.api.nvim_win_get_width(win)  - 1
-
-          -- Clip to bounds.
-          local v_top    = math.max(image_top,    win_top)
-          local v_bottom = math.min(image_bottom, win_bottom)
-          local v_left   = math.max(image_left,   win_left)
-          local v_right  = math.min(image_right,  win_right)
-
-          if v_top <= v_bottom and v_left <= v_right then
-            out[#out + 1] = {
-              row = v_top,
-              col = v_left,
-              src = {
-                x = v_left - image_left,
-                y = v_top  - image_top,
-                w = v_right  - v_left + 1,
-                h = v_bottom - v_top  + 1,
-              },
-            }
+          anchor_screen_row = sp.row
+          anchor_screen_col = sp.col
+        else
+          local topmost = vim.fn.line('w0', win)
+          if topmost and topmost > 0 and line < topmost then
+            -- Above the window: project the anchor upward.
+            local rows_above = topmost - line
+            anchor_screen_row = win_top - rows_above
+            -- For col we don't have a direct screenpos lookup; approximate
+            -- assuming no wrap and column 1 origin. Off for offset columns.
+            anchor_screen_col = win_left + (col - 1)
           end
+          -- Below the window (or unable to resolve): leave nil → skip.
+        end
+
+        if anchor_screen_row then
+          -- The image goes BELOW the anchor's row.
+          local image_anchor_row = anchor_screen_row + 1
+          local image_anchor_col = anchor_screen_col + pad
+          local p = util.clip_to_bounds(
+            image_anchor_row, image_anchor_col,
+            c.opts.width or 1, c.opts.height or 1,
+            win_top, win_left, win_bottom, win_right
+          )
+          if p then out[#out + 1] = p end
         end
       end
     end

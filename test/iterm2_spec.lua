@@ -409,6 +409,25 @@ describe('alt-image.iterm2 relative=buffer', function()
     vim.cmd('only')
   end)
 
+  it('crops from the top when anchor scrolls above window', function()
+    local png_bytes = read_fixture()
+    local buf = vim.api.nvim_create_buf(true, false)
+    local lines = {}
+    for i = 1, 30 do lines[#lines+1] = 'line ' .. i end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_set_current_buf(buf)
+    local id = img.set(png_bytes, { relative='buffer', buf=buf,
+                                    row=1, col=1, width=4, height=10 })
+    vim.cmd('5')
+    vim.cmd('normal! zt')
+    local positions = require('alt-image._carrier').get_positions(
+      require('alt-image.iterm2'), id)
+    assert.is_true(#positions >= 1)
+    assert.is_true(positions[1].src.y > 0)
+    assert.is_true(positions[1].src.h < 10)
+    img.del(id); vim.cmd('only')
+  end)
+
   it('emits OSC 1337 with cropped dimensions when src is a sub-rect', function()
     local png_bytes = read_fixture()
     local buf = vim.api.nvim_create_buf(true, false)
