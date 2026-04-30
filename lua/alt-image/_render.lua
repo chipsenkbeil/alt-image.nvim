@@ -41,16 +41,11 @@ local function emit_all_unsynced()
 end
 
 local pending_rerender = false
-local just_rerendered = false
 
 -- Synchronized clear + re-emit. Use on update/delete so old pixels don't trail.
 function M.rerender_all()
   if pending_rerender then return end
   pending_rerender = true
-  -- Set the recursion guard BEFORE mode() / redraw so the on_end fired by
-  -- those calls (during :redraw's processing) sees just_rerendered=true and
-  -- returns early instead of scheduling another rerender_all.
-  just_rerendered = true
   local old_termsync = vim.o.termsync
   vim.o.termsync = false
   util.term_send(SYNC_START)
@@ -66,8 +61,7 @@ function M.rerender_all()
 end
 
 -- Re-emit only. Use after Neovim has already painted (redraw cycle done).
--- (Kept for completeness; on_end now uses rerender_all to clear any image
--- pixels that scrolled with text in the terminal framebuffer.)
+-- Called by on_end to re-paint any image cells Neovim just wrote over.
 function M.refresh()
   if next(placements) == nil then return end
   emit_all_unsynced()
@@ -76,19 +70,11 @@ end
 local refresh_scheduled = false
 vim.api.nvim_set_decoration_provider(NS, {
   on_end = function()
-    -- Skip the redraw that vim.cmd.mode() inside rerender_all() just scheduled,
-    -- otherwise on_end -> rerender_all -> on_end -> ... recurses.
-    if just_rerendered then
-      just_rerendered = false
-      return
-    end
     if next(placements) == nil or refresh_scheduled then return end
     refresh_scheduled = true
     vim.schedule(function()
       refresh_scheduled = false
-      -- Use rerender_all (clear + re-emit) so image pixels that scrolled with
-      -- text in the terminal framebuffer get wiped before we re-emit.
-      M.rerender_all()
+      M.refresh()
     end)
   end,
 })
