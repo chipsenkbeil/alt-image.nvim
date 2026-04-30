@@ -98,9 +98,17 @@ function M.set(data_or_id, opts)
     -- Update path
     local s = state[data_or_id]
     if not s then error('alt-image.iterm2: unknown id ' .. tostring(data_or_id), 2) end
-    s.opts = vim.tbl_extend('force', s.opts, canonicalize(opts))
     -- v1: don't support relative-changing updates (carrier kind would need
-    -- to be re-created). Document this restriction.
+    -- to be re-created). Preserve the original relative on partial-merge so
+    -- canonicalize's default of 'ui' doesn't clobber 'editor'/'buffer'.
+    local upd = canonicalize(opts)
+    if not (opts and opts.relative) then upd.relative = s.opts.relative end
+    s.opts = vim.tbl_extend('force', s.opts, upd)
+    -- For carrier-managed placements, reposition the carrier so the resolved
+    -- screen pos reflects the new opts (otherwise the float stays put).
+    if s.opts.relative ~= 'ui' then
+      require('alt-image._carrier').update(M, data_or_id, s.opts)
+    end
     render.rerender_all()
     return data_or_id
   end

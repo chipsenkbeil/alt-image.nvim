@@ -69,7 +69,11 @@ local function resolve_screen_pos(c)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       if vim.api.nvim_win_get_buf(win) == c.bufnr then
         local sp = vim.fn.screenpos(win, mark[1] + 1, (mark[2] or 0) + 1)
-        if sp.row > 0 then return { row = sp.row, col = sp.col } end
+        if sp.row > 0 then
+          -- The image goes in the virt_lines BELOW the anchor line, not on it.
+          -- (Assumes the anchor line is one screen row tall — i.e., not wrapped.)
+          return { row = sp.row + 1, col = sp.col }
+        end
       end
     end
     return nil
@@ -94,6 +98,38 @@ function M.register(provider, id, opts)
   c.last_pos = resolve_screen_pos(c)
   carriers[provider_key(provider, id)] = c
   return c.last_pos
+end
+
+-- Reposition the carrier for an existing placement. Called by providers when
+-- M.set(id, opts) updates row/col/width/height/etc. Without this, carriers
+-- stay where they were first opened and the resolved screen pos never moves.
+function M.update(provider, id, opts)
+  local key = provider_key(provider, id)
+  local c = carriers[key]
+  if not c then return end
+  c.opts = opts
+  if c.kind == 'editor' then
+    if c.winid and vim.api.nvim_win_is_valid(c.winid) then
+      local w, h = size_in_cells(opts)
+      vim.api.nvim_win_set_config(c.winid, {
+        relative  = 'editor',
+        row       = (opts.row or 1) - 1,
+        col       = (opts.col or 1) - 1,
+        width     = w,
+        height    = h,
+        focusable = false,
+        style     = 'minimal',
+        zindex    = opts.zindex or 50,
+      })
+    end
+  elseif c.kind == 'buffer' then
+    if c.extmark_id then
+      pcall(vim.api.nvim_buf_del_extmark, c.bufnr, NS, c.extmark_id)
+    end
+    if opts.buf then c.bufnr = opts.buf end
+    c.extmark_id = place_buffer_extmark(opts)
+  end
+  c.last_pos = resolve_screen_pos(c)
 end
 
 function M.unregister(provider, id)

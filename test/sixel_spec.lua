@@ -96,6 +96,27 @@ describe('alt-image.sixel relative=editor', function()
     vim.wait(50)
     assert.is_true(#vim.api.nvim_list_wins() == before_wins)
   end)
+
+  it('repositions the carrier float on set(id, opts) update', function()
+    local before_wins = vim.api.nvim_list_wins()
+    local id = img.set(png_bytes, { relative = 'editor', row = 5, col = 10,
+                                    width = 4, height = 4 })
+    local float_winid
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local existed_before = false
+      for _, b in ipairs(before_wins) do if b == w then existed_before = true end end
+      if not existed_before then
+        local cfg = vim.api.nvim_win_get_config(w)
+        if cfg.relative == 'editor' then float_winid = w; break end
+      end
+    end
+    assert.is_true(float_winid ~= nil)
+    img.set(id, { row = 8, col = 15 })
+    local cfg = vim.api.nvim_win_get_config(float_winid)
+    assert.equals(7, cfg.row)
+    assert.equals(14, cfg.col)
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.sixel relative=buffer', function()

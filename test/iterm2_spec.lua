@@ -114,6 +114,29 @@ describe('alt-image.iterm2 relative=editor', function()
     vim.wait(50)
     assert.is_true(#vim.api.nvim_list_wins() == before_wins)
   end)
+
+  it('repositions the carrier float on set(id, opts) update', function()
+    local before_wins = vim.api.nvim_list_wins()
+    local id = img.set('PNGBYTES', { relative = 'editor', row = 5, col = 10,
+                                     width = 4, height = 4 })
+    -- Find the newly opened float (relative='editor', row=4 in 0-indexed cfg).
+    local float_winid
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local existed_before = false
+      for _, b in ipairs(before_wins) do if b == w then existed_before = true end end
+      if not existed_before then
+        local cfg = vim.api.nvim_win_get_config(w)
+        if cfg.relative == 'editor' then float_winid = w; break end
+      end
+    end
+    assert.is_true(float_winid ~= nil)
+    -- Update position via id-update path.
+    img.set(id, { row = 8, col = 15 })
+    local cfg = vim.api.nvim_win_get_config(float_winid)
+    assert.equals(7, cfg.row)   -- 0-indexed: row=8 -> 7
+    assert.equals(14, cfg.col)  -- 0-indexed: col=15 -> 14
+    img.del(id)
+  end)
 end)
 
 describe('alt-image.iterm2 relative=buffer', function()
