@@ -104,6 +104,16 @@ local function build_png_cropped(s, src)
   local h_px = math.floor(src.h * px_per_cell_y + 0.5)
   if w_px < 1 then w_px = 1 end
   if h_px < 1 then h_px = 1 end
+  -- Fast path: if convert is available and accel is on, do crop + PNG
+  -- re-encode in a single subprocess call. Falls back to pure Lua on nil.
+  if util.is_png_data(s.data) then
+    local accel = senc.crop_and_encode_png(s.data, x_px, y_px, w_px, h_px)
+    if accel and #accel > 0 then
+      -- Returned PNG dims may differ slightly due to clamping in convert;
+      -- the caller only cares about the resulting cell counts (src.w/h).
+      return accel, w_px, h_px
+    end
+  end
   local cropped, cw_px, ch_px = senc.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
   return png_encode.encode(cropped, cw_px, ch_px), cw_px, ch_px
 end

@@ -26,6 +26,21 @@ function M.check()
     h.warn('tmux detected: tmux passthrough is NOT supported in this version '
         .. 'of alt-image.nvim. Images may not render. Tracked in README.')
   end
+
+  -- Acceleration tooling
+  local util = require('alt-image._util')
+  local accel = (mod._config and mod._config.accelerate) and true or false
+  h.info('Acceleration: ' .. (accel and 'enabled' or 'disabled'))
+  if util.have_img2sixel() then
+    h.ok('img2sixel detected — sixel encoding accelerated')
+  else
+    h.info('img2sixel not found — falling back to convert or pure Lua')
+  end
+  if util.have_convert() then
+    h.ok('convert (ImageMagick) detected — used for cropping and sixel fallback')
+  else
+    h.info('convert not found — using pure Lua for cropping and PNG encode')
+  end
 end
 
 return M

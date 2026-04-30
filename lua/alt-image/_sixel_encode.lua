@@ -403,4 +403,103 @@ M.resize       = _resize
 M.quantize     = _quantize
 M.encode_sixel = _encode_sixel
 
+-- ---------------------------------------------------------------------------
+-- Acceleration dispatchers
+-- ---------------------------------------------------------------------------
+--
+-- These wrap the pure-Lua paths above with an optional external-tool fast
+-- path. The tools take PNG input on stdin, so callers that already have raw
+-- RGBA must pay a single PNG re-encode hop. For the (much more common) crop
+-- case we expose a separate dispatcher that hands the *original* PNG bytes
+-- straight to `convert -crop` and avoids the decode -> crop -> re-encode
+-- round-trip entirely.
+--
+-- Dispatchers read `require('alt-image')._config.accelerate` lazily so we
+-- don't introduce a require-time cycle (`alt-image` -> sixel/iterm2 ->
+-- `_sixel_encode` -> `alt-image`).
+
+local _util = require('alt-image._util')
+
+local function _accelerate_enabled()
+  -- Lazy require avoids a circular dep at module load.
+  local ok, top = pcall(require, 'alt-image')
+  if not ok or type(top) ~= 'table' then return true end
+  local cfg = top._config
+  if not cfg then return true end
+  return cfg.accelerate and true or false
+end
+
+---Run a subprocess synchronously and return stdout on success, nil on fail.
+---@param cmd string[]
+---@param stdin string
+---@return string? stdout
+local function _run(cmd, stdin)
+  local ok, res = pcall(function()
+    return vim.system(cmd, { stdin = stdin, text = false }):wait()
+  end)
+  if not ok or not res or res.code ~= 0 then return nil end
+  return res.stdout
+end
+
+---Encode an RGBA buffer to a sixel DCS string, accelerated if possible.
+---Priority: img2sixel -> convert -> pure Lua.
+---@param rgba string
+---@param w_px integer
+---@param h_px integer
+---@return string sixel DCS
+function M.encode_sixel_dispatch(rgba, w_px, h_px)
+  if _accelerate_enabled() then
+    -- Both tools want PNG on stdin; encode once and try each tool.
+    local png_bytes
+    if _util.have_img2sixel() or _util.have_convert() then
+      local png_encode = require('alt-image._png_encode')
+      png_bytes = png_encode.encode(rgba, w_px, h_px)
+    end
+    if _util.have_img2sixel() and png_bytes then
+      local out = _run({ 'img2sixel' }, png_bytes)
+      if out and #out > 0 then return out end
+    end
+    if _util.have_convert() and png_bytes then
+      local out = _run(
+        { 'convert', '-', '-define', 'sixel:colors=256', 'sixel:-' },
+        png_bytes)
+      if out and #out > 0 then return out end
+    end
+  end
+  return _encode_sixel(rgba, w_px, h_px)
+end
+
+---Combined crop + sixel-encode using `convert` in a single call.
+---Returns nil if accel is disabled, `convert` is missing, or the subprocess
+---fails — caller must fall back to its existing decode -> crop -> encode path.
+---@param png_bytes string original PNG bytes
+---@param x_px integer crop x offset (px)
+---@param y_px integer crop y offset (px)
+---@param w_px integer crop width (px)
+---@param h_px integer crop height (px)
+---@return string? sixel
+function M.crop_and_encode_sixel(png_bytes, x_px, y_px, w_px, h_px)
+  if not _accelerate_enabled() then return nil end
+  if not _util.have_convert() then return nil end
+  local geom = string.format('%dx%d+%d+%d', w_px, h_px, x_px, y_px)
+  return _run(
+    { 'convert', '-', '-crop', geom, '-define', 'sixel:colors=256', 'sixel:-' },
+    png_bytes)
+end
+
+---Combined crop + PNG re-encode using `convert`. Returns nil on failure so
+---the caller can fall back to pure-Lua crop + `_png_encode.encode`.
+---@param png_bytes string original PNG bytes
+---@param x_px integer
+---@param y_px integer
+---@param w_px integer
+---@param h_px integer
+---@return string? png
+function M.crop_and_encode_png(png_bytes, x_px, y_px, w_px, h_px)
+  if not _accelerate_enabled() then return nil end
+  if not _util.have_convert() then return nil end
+  local geom = string.format('%dx%d+%d+%d', w_px, h_px, x_px, y_px)
+  return _run({ 'convert', '-', '-crop', geom, 'png:-' }, png_bytes)
+end
+
 return M

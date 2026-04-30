@@ -16,6 +16,10 @@ local DETECT_ORDER = { 'iterm2', 'sixel' }
 local cached_provider = nil
 local user_choice = nil
 
+-- Public runtime config. Read by encoder dispatchers in `_sixel_encode` and
+-- crop helpers in `sixel.lua` / `iterm2.lua`. Defaults: acceleration on.
+M._config = { accelerate = true }
+
 local function detect()
   if user_choice then
     return PROVIDERS[user_choice]()
@@ -44,6 +48,9 @@ function M.setup(opts)
     end
     user_choice = opts.protocol
     cached_provider = PROVIDERS[user_choice]()
+  end
+  if opts.accelerate ~= nil then
+    M._config.accelerate = opts.accelerate and true or false
   end
 end
 

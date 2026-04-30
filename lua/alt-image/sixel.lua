@@ -85,23 +85,39 @@ local function build_sixel(s)
   if s.sixel_cache then return s.sixel_cache end
   util.query_cell_size()
   local rgba, w, h = ensure_resized(s)
-  s.sixel_cache = senc.encode_sixel(rgba, w, h)
+  s.sixel_cache = senc.encode_sixel_dispatch(rgba, w, h)
   return s.sixel_cache
 end
 
 -- Build a sixel DCS for a sub-rectangle of the source image. The src record
 -- describes the crop in image cells; we use the cached resized buffer, slice
--- out the requested sub-rectangle, and encode.
+-- out the requested sub-rectangle, and encode. When `convert` is available
+-- and the placement has not been resized, we feed the original PNG straight
+-- to `convert -crop` and skip the decode/crop/re-encode round-trip.
 local function build_sixel_cropped(s, src)
   util.query_cell_size()
   local cw, ch = util.cell_pixel_size()
+  local x_px = src.x * cw
+  local y_px = src.y * ch
+  local w_px = src.w * cw
+  local h_px = src.h * ch
+
+  -- Fast path: if no resize was requested, feed the original PNG to convert.
+  -- We can detect "no resize" by comparing the resized dims to the PNG's
+  -- IHDR dims. ensure_resized only resizes when opts.width/height is set
+  -- *and* would change the image dims; otherwise it returns the decoded buf.
+  local can_use_png_fast_path = type(s.data) == 'string'
+                                and util.is_png_data(s.data)
+                                and not s.opts.width
+                                and not s.opts.height
+  if can_use_png_fast_path then
+    local accel = senc.crop_and_encode_sixel(s.data, x_px, y_px, w_px, h_px)
+    if accel and #accel > 0 then return accel end
+  end
+
   local rgba, w, h = ensure_resized(s)
-  -- Resize has already happened in ensure_resized; now crop using cell offsets.
-  local cropped, cw_px, ch_px = senc.crop_rgba(
-    rgba, w, h,
-    src.x * cw, src.y * ch, src.w * cw, src.h * ch
-  )
-  return senc.encode_sixel(cropped, cw_px, ch_px)
+  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
+  return senc.encode_sixel_dispatch(cropped, cw_px, ch_px)
 end
 
 local CROP_CACHE_MAX = 16
