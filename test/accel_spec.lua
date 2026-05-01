@@ -127,6 +127,49 @@ describe('_magick.binary()', function()
     restore()
     if not ok then error(err, 0) end
   end)
+
+  it('accepts a list and uses the first executable candidate', function()
+    local m, restore = fresh_magick(
+      { magick = false, convert = true },
+      { magick = { 'magick', 'convert' } })
+    local ok, err = pcall(function()
+      assert.equals('convert', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil when no list candidate is executable', function()
+    local m, restore = fresh_magick(
+      { ['gm-bogus'] = false, ['mogrify'] = false },
+      { magick = { 'gm-bogus', 'mogrify' } })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('skips non-executable candidates earlier in the list', function()
+    local m, restore = fresh_magick(
+      { ['gm-bogus'] = false, magick = true, convert = true },
+      { magick = { 'gm-bogus', 'magick', 'convert' } })
+    local ok, err = pcall(function()
+      assert.equals('magick', m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('returns nil for an empty list', function()
+    local m, restore = fresh_magick({ magick = true, convert = true },
+                                    { magick = {} })
+    local ok, err = pcall(function()
+      assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
 end)
 
 describe('_libsixel.binary()', function()
@@ -192,6 +235,17 @@ describe('_libsixel.binary()', function()
     local m, restore = fresh_libsixel({ img2sixel = false }, {})
     local ok, err = pcall(function()
       assert.is_nil(m.binary())
+    end)
+    restore()
+    if not ok then error(err, 0) end
+  end)
+
+  it('accepts a list and uses the first executable candidate', function()
+    local m, restore = fresh_libsixel(
+      { ['libsixel-img2sixel'] = false, img2sixel = true },
+      { img2sixel = { 'libsixel-img2sixel', 'img2sixel' } })
+    local ok, err = pcall(function()
+      assert.equals('img2sixel', m.binary())
     end)
     restore()
     if not ok then error(err, 0) end

@@ -7,13 +7,17 @@
 -- Configuration is read from `vim.g.alt_image` at call-time:
 --
 --   vim.g.alt_image = {
---     protocol  = 'auto',     -- 'iterm2' | 'sixel' | 'auto' (default)
---     magick    = 'magick',   -- string | false. nil/unset = auto-detect.
---     img2sixel = 'img2sixel',-- string | false. nil/unset = auto-detect.
+--     protocol  = 'auto',                    -- 'iterm2' | 'sixel' | 'auto' (default)
+--     magick    = { 'magick', 'convert' },   -- string | string[] | false.
+--                                            -- nil/unset = { 'magick', 'convert' }.
+--     img2sixel = 'img2sixel',               -- string | string[] | false.
+--                                            -- nil/unset = { 'img2sixel' }.
 --   }
 --
--- Reading at call-time means callers can set `vim.g.alt_image` after
--- `require('alt-image')` and still see the effect.
+-- The tool fields accept a single binary name, a list of candidates (first
+-- executable wins), or `false` to disable. Reading at call-time means callers
+-- can set `vim.g.alt_image` after `require('alt-image')` and still see the
+-- effect.
 
 local M = {}
 

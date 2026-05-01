@@ -1,26 +1,21 @@
 -- alt-image internal wrapper around libsixel's `img2sixel` CLI.
 --
 -- Resolves the binary to invoke from `vim.g.alt_image.img2sixel`:
---   - string: use that exact binary if `executable(name) == 1`; else nil.
---   - false:  never use img2sixel.
+--   - string:   use that exact binary if executable; else nil.
+--   - string[]: first candidate that is executable; else nil.
+--   - false:    never use img2sixel.
 --   - nil / unset: auto-detect by trying `img2sixel`.
 
 local M = {}
 
 local _util = require('alt-image._core.util')
 
+local DEFAULTS = { 'img2sixel' }
+
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-  local g = vim.g.alt_image or {}
-  local cfg = g.img2sixel
-  if cfg == false then return nil end
-  if type(cfg) == 'string' then
-    if vim.fn.executable(cfg) == 1 then return cfg end
-    return nil
-  end
-  if _util._executable('img2sixel') then return 'img2sixel' end
-  return nil
+  return _util.resolve_binary((vim.g.alt_image or {}).img2sixel, DEFAULTS)
 end
 
 ---Run a subprocess synchronously and return stdout on success, nil on fail.

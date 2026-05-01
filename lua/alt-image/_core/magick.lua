@@ -1,9 +1,11 @@
 -- alt-image internal wrapper around the ImageMagick CLI (`magick` / `convert`).
 --
 -- Resolves the binary to invoke from `vim.g.alt_image.magick`:
---   - string: use that exact binary if `executable(name) == 1`; else nil.
---   - false:  never use any magick binary.
---   - nil / unset: auto-detect by trying `magick` then `convert`.
+--   - string:   use that exact binary if executable; else nil.
+--   - string[]: first candidate that is executable; else nil.
+--   - false:    never use any magick binary.
+--   - nil / unset: auto-detect by trying `magick` (IM7) then `convert`
+--     (IM6, plus IM7's compat shim).
 --
 -- Exposes thin helpers that subprocess out to the resolved binary for the
 -- crop / encode operations the alt-image providers need. Returns nil on any
@@ -13,21 +15,12 @@ local M = {}
 
 local _util = require('alt-image._core.util')
 
+local DEFAULTS = { 'magick', 'convert' }
+
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
----Auto-detect order: `magick` (IM7) then `convert` (IM6 + IM7 alias).
 ---@return string?
 function M.binary()
-  local g = vim.g.alt_image or {}
-  local cfg = g.magick
-  if cfg == false then return nil end
-  if type(cfg) == 'string' then
-    if vim.fn.executable(cfg) == 1 then return cfg end
-    return nil
-  end
-  -- nil / unset: auto-detect via cached executable lookup.
-  if _util._executable('magick')  then return 'magick'  end
-  if _util._executable('convert') then return 'convert' end
-  return nil
+  return _util.resolve_binary((vim.g.alt_image or {}).magick, DEFAULTS)
 end
 
 ---Run a subprocess synchronously and return stdout on success, nil on fail.
