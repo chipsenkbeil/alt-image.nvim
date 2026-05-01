@@ -27,20 +27,20 @@ local M = {}
 
 ---@type altimage.Config
 local DEFAULTS = {
-	magick = { "magick", "convert" },
-	img2sixel = { "img2sixel" },
+    magick = { "magick", "convert" },
+    img2sixel = { "img2sixel" },
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_image).
 ---@return altimage.Config
 function M.read()
-	return vim.tbl_extend("force", DEFAULTS, vim.g.alt_image or {})
+    return vim.tbl_extend("force", DEFAULTS, vim.g.alt_image or {})
 end
 
 ---Expose defaults read-only for tests / introspection.
 ---@return altimage.Config
 function M.defaults()
-	return vim.deepcopy(DEFAULTS)
+    return vim.deepcopy(DEFAULTS)
 end
 
 return M
