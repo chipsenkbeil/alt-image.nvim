@@ -308,6 +308,7 @@ describe("_core.util terminal_pixel_scale", function()
 
     it("does not send OSC 1337 to terminals not in the gate", function()
         vim.env.TERM_PROGRAM = "foot"
+        vim.env.KONSOLE_VERSION = nil
         local saw_osc1337 = false
         tty.query = function(payload, _opts, cb)
             if payload:match("1337;ReportCellSize") then
@@ -323,6 +324,43 @@ describe("_core.util terminal_pixel_scale", function()
         local util = reload_util()
         util.terminal_pixel_scale()
         assert.is_false(saw_osc1337)
+    end)
+
+    it("sends OSC 1337 on Mintty (TERM_PROGRAM=mintty)", function()
+        vim.env.TERM_PROGRAM = "mintty"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=16.0;8.0;1.0\007" },
+        })
+        local util = reload_util()
+        assert.equals(1, util.terminal_pixel_scale())
+        local osc, _ = util.terminal_pixel_scale_sources()
+        assert.equals(1, osc)
+    end)
+
+    it("sends OSC 1337 when KONSOLE_VERSION is set even if TERM_PROGRAM isn't", function()
+        local saved_konsole = vim.env.KONSOLE_VERSION
+        vim.env.TERM_PROGRAM = nil
+        vim.env.KONSOLE_VERSION = "240800"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;2.0\007" },
+        })
+        local util = reload_util()
+        local ok, err = pcall(function()
+            assert.equals(2, util.terminal_pixel_scale())
+        end)
+        vim.env.KONSOLE_VERSION = saved_konsole
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("sends OSC 1337 on Tabby (TERM_PROGRAM=Tabby)", function()
+        vim.env.TERM_PROGRAM = "Tabby"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=20.0;10.0;1.0\007" },
+        })
+        local util = reload_util()
+        assert.equals(1, util.terminal_pixel_scale())
     end)
 
     it("ignores malformed responses and stays at 1", function()

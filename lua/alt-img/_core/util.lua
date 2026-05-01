@@ -206,15 +206,32 @@ M._terminal_pixel_scale_queried = false
 M._scale_from_osc1337 = 0
 M._scale_from_geometry = 0
 
-local OSC_1337_REPORT_CELL_SIZE_TERMS = {
+-- Terminals known to implement iTerm2's `OSC 1337 ; ReportCellSize`. Reply
+-- format is `<height>;<width>;<scale>` where height/width are in POINTS
+-- (logical pixels) and scale is the screen scale factor — what we want.
+-- Sources: iTerm2 docs (origin), WezTerm docs (full IIP compat),
+-- Mintty/Konsole/Tabby (IIP support).
+local OSC_1337_REPORT_CELL_SIZE_TERM_PROGRAMS = {
     ["iTerm.app"] = true,
     ["WezTerm"] = true,
+    ["mintty"] = true,
+    ["Tabby"] = true,
 }
+
+---@private
+---@return boolean
+local function osc1337_terminal_likely_supported()
+    -- Konsole doesn't always set TERM_PROGRAM but does set KONSOLE_VERSION.
+    if vim.env.KONSOLE_VERSION and vim.env.KONSOLE_VERSION ~= "" then
+        return true
+    end
+    return OSC_1337_REPORT_CELL_SIZE_TERM_PROGRAMS[vim.env.TERM_PROGRAM] == true
+end
 
 ---@private
 ---@return integer scale 0 if not applicable / no answer; otherwise >= 1
 function M._query_scale_osc1337()
-    if not OSC_1337_REPORT_CELL_SIZE_TERMS[vim.env.TERM_PROGRAM] then
+    if not osc1337_terminal_likely_supported() then
         return 0
     end
     local timeout = 500
