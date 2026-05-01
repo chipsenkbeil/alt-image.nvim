@@ -80,6 +80,16 @@ external-tool detection — runs in ~400ms worst case.
 
 …drill into a single protocol.
 
+## Commands
+
+A single `:AltImg` command groups runtime diagnostics and control. Tab
+completion lists the available subcommands.
+
+| Subcommand | What it does |
+|---|---|
+| `:AltImg info` | Print a diagnostic dump: terminal env, cell pixel size, sixel pixel scale (OSC 1337 + CSI 14t/18t/16t breakdown plus the effective value), external-tool detection, and every active placement with its resolved opts and target pixel dims. The first stop when something looks wrong. |
+| `:AltImg refresh` | Force every placement to re-emit on the next render tick. Use after `:mode`, `:redraw!`, or any other terminal-side wipe that has cleared image cells without alt-img noticing. Caches stay warm — no re-encoding. |
+
 ## Acceleration
 
 alt-img picks the cheapest available path per stage. Detection runs once

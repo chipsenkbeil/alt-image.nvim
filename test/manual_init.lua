@@ -1,8 +1,13 @@
 -- test/manual_init.lua
--- Boots a minimal Neovim for `make smoke-test`.
+-- Boots a minimal Neovim for `make smoke-test`. We launch with --noplugin
+-- (see Makefile) which skips runtimepath plugin/ auto-loading, so we
+-- explicitly source the production plugin file here to exercise the same
+-- command-registration path real users hit.
 vim.opt.runtimepath:prepend(vim.uv.cwd())
 vim.opt.mouse = "a"
 vim.opt.mousemoveevent = true
+
+vim.cmd.source(vim.uv.cwd() .. "/plugin/alt-img.lua")
 
 local altimg = require("alt-img")
 vim.ui.img = altimg
@@ -127,9 +132,10 @@ end, {
     end,
 })
 
--- Helper to identify the active vim.ui.img provider. When the autodetect
--- dispatcher is in use, also resolve which underlying protocol it picked
--- (only after the cache is warm — runs detection if not).
+-- :AltImg info / :AltImg refresh come from plugin/alt-img.lua (sourced
+-- above). Keep AltImgProvider, AltImgDemo, AltImgMouse, AltImgDel here —
+-- those are smoke-test scaffolding rather than production diagnostics.
+
 local function provider_name()
     local img = vim.ui.img
     local iterm2 = require("alt-img.iterm2")
@@ -142,157 +148,16 @@ local function provider_name()
     end
     if img == require("alt-img") then
         local ok, p = pcall(img._provider)
-        if not ok or not p then
-            return "alt-img (autodetect, not yet resolved)"
-        end
-        if p == iterm2 then
+        if ok and p == iterm2 then
             return "alt-img (autodetect → alt-img.iterm2)"
         end
-        if p == sixel then
+        if ok and p == sixel then
             return "alt-img (autodetect → alt-img.sixel)"
         end
-        return "alt-img (autodetect → <unknown>)"
+        return "alt-img (autodetect)"
     end
     return "<unknown>"
 end
-
--- Force re-emit of every placement. Useful after `:mode`, `:redraw!`, or
--- any other terminal-side wipe that leaves image cells blank without
--- changing the placement's resolved screen position.
-vim.api.nvim_create_user_command("AltImgRefresh", function()
-    if vim.ui.img and vim.ui.img.refresh then
-        vim.ui.img.refresh()
-    else
-        print("alt-img: vim.ui.img.refresh() not available")
-    end
-end, {})
-
-vim.api.nvim_create_user_command("AltImgInfo", function()
-    local util = require("alt-img._core.util")
-    local lines = {
-        "alt-img.nvim diagnostics",
-        "==========================",
-        "Terminal env:",
-        string.format("  TERM           = %s", tostring(vim.env.TERM)),
-        string.format("  TERM_PROGRAM   = %s", tostring(vim.env.TERM_PROGRAM)),
-        string.format("  COLORTERM      = %s", tostring(vim.env.COLORTERM)),
-        string.format("  TMUX           = %s", tostring(vim.env.TMUX)),
-        string.format("  SSH_CONNECTION = %s", tostring(vim.env.SSH_CONNECTION)),
-        "",
-        "Neovim:",
-        string.format("  version        = v%d.%d.%d", vim.version().major, vim.version().minor, vim.version().patch),
-    }
-
-    -- Cell pixel size — what the providers use to convert opts.width/height
-    -- (in cells) to pixel dims for the encoder. Trigger a fresh CSI 16t
-    -- query if we haven't asked yet so the printed value reflects the
-    -- terminal's current cell metrics, not the platform default.
-    pcall(util.query_cell_size)
-    local cw, ch = util.cell_pixel_size()
-    table.insert(lines, "")
-    table.insert(lines, "Cell pixel size (CSI 16t):")
-    table.insert(lines, string.format("  width  = %d px", cw))
-    table.insert(lines, string.format("  height = %d px", ch))
-    table.insert(lines, string.format("  queried = %s", tostring(util._cell_size_queried)))
-
-    table.insert(lines, "")
-    table.insert(lines, "Active vim.ui.img provider:")
-    table.insert(lines, "  module         = " .. provider_name())
-
-    table.insert(lines, "")
-    table.insert(lines, "Per-provider _supported():")
-    local i_ok, i_msg = require("alt-img.iterm2")._supported()
-    local s_ok, s_msg = require("alt-img.sixel")._supported()
-    table.insert(lines, string.format("  iterm2._supported() = %s, %s", tostring(i_ok), i_msg or "no message"))
-    table.insert(lines, string.format("  sixel._supported()  = %s, %s", tostring(s_ok), s_msg or "no message"))
-
-    -- External tools + PNG compression status
-    local g = vim.g.alt_img or {}
-    local magick = require("alt-img._core.magick").binary()
-    local libsixel = require("alt-img.sixel._libsixel").binary()
-    local png_encode = require("alt-img._core.png")
-    table.insert(lines, "")
-    table.insert(lines, "External tools:")
-    table.insert(lines, string.format("  vim.g.alt_img.magick    = %s", vim.inspect(g.magick)))
-    table.insert(lines, string.format("  vim.g.alt_img.img2sixel = %s", vim.inspect(g.img2sixel)))
-    table.insert(lines, string.format("  resolved magick           = %s", magick or "not used"))
-    table.insert(lines, string.format("  resolved img2sixel        = %s", libsixel or "not used"))
-    table.insert(
-        lines,
-        string.format(
-            "  PNG libz compression      = %s",
-            png_encode.has_libz() and "active" or "fallback (stored blocks)"
-        )
-    )
-    -- Sixel-specific: the encoder multiplies opts.width/height × cell pixels
-    -- by this factor before handing to magick / img2sixel. The encoder
-    -- combines two auto-detect signals (taking the larger) when the user
-    -- hasn't set vim.g.alt_img.sixel_pixel_scale:
-    --   1. OSC 1337 ; ReportCellSize — iTerm2/WezTerm only.
-    --   2. CSI 14t/18t ÷ CSI 16t      — chafa's geometry trick.
-    -- Both are shown below so it's obvious which one (if any) fired and
-    -- whether they agree.
-    local osc, geom = util.terminal_pixel_scale_sources()
-    local final_auto = util.terminal_pixel_scale()
-    local effective = (type(g.sixel_pixel_scale) == "number" and g.sixel_pixel_scale >= 1)
-            and math.floor(g.sixel_pixel_scale)
-        or final_auto
-    table.insert(lines, string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale)))
-    table.insert(
-        lines,
-        string.format("  scale via OSC 1337              = %s", osc > 0 and (osc .. "×") or "no answer")
-    )
-    table.insert(
-        lines,
-        string.format("  scale via CSI 14t/18t/16t       = %s", geom > 0 and (geom .. "×") or "no signal")
-    )
-    table.insert(lines, string.format("  scale chosen by auto-detect     = %d×", final_auto))
-    table.insert(lines, string.format("  scale actually used (effective) = %d×", effective))
-
-    -- Active placements per provider, with their resolved opts (post-derive_dims).
-    -- Useful when the displayed image looks wrong-sized — opts.width/height
-    -- here are in cells, and the encoder targets opts.* × cell_pixel_size.
-    local function dump_placements(provider_label, mod)
-        local state = mod._state or {}
-        local rows = {}
-        for id, s in pairs(state) do
-            rows[#rows + 1] = id
-        end
-        table.sort(rows)
-        if #rows == 0 then
-            table.insert(lines, string.format("  %s: no placements", provider_label))
-            return
-        end
-        table.insert(lines, string.format("  %s:", provider_label))
-        for _, id in ipairs(rows) do
-            local s = state[id]
-            local o = s.opts or {}
-            table.insert(
-                lines,
-                string.format(
-                    "    id=%d  relative=%s  row=%s col=%s  width=%s height=%s  buf=%s  → target=%s×%s px",
-                    id,
-                    tostring(o.relative),
-                    tostring(o.row),
-                    tostring(o.col),
-                    tostring(o.width),
-                    tostring(o.height),
-                    tostring(o.buf),
-                    tostring((o.width or 0) * cw),
-                    tostring((o.height or 0) * ch)
-                )
-            )
-        end
-    end
-    table.insert(lines, "")
-    table.insert(lines, "Active placements:")
-    dump_placements("alt-img.iterm2", require("alt-img.iterm2"))
-    dump_placements("alt-img.sixel", require("alt-img.sixel"))
-
-    for _, l in ipairs(lines) do
-        print(l)
-    end
-end, {})
 
 vim.api.nvim_create_user_command("AltImgProvider", function(o)
     local arg = o.args ~= "" and o.args or "auto"
@@ -335,7 +200,7 @@ print("  :AltImgDel <id>     (or `inf` to clear all)")
 print("  :AltImgMouse ui     (image follows mouse, absolute terminal coords)")
 print("  :AltImgMouse editor (image follows mouse, relative to editor)")
 print("  :AltImgMouse off    (stop following)")
-print("  :AltImgInfo                    (diagnostics: terminal + provider state)")
-print("  :AltImgRefresh                 (force re-emit after :mode / :redraw! / external clear)")
+print("  :AltImg info                       (diagnostics: terminal + provider state)")
+print("  :AltImg refresh                    (force re-emit after :mode / :redraw! / external clear)")
 print("  :AltImgProvider iterm2|sixel|auto  (switch vim.ui.img provider)")
 print("  :checkhealth alt-img alt-img.iterm2 alt-img.sixel")
