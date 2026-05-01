@@ -133,6 +133,80 @@ describe("_util.clip_to_bounds", function()
     end)
 end)
 
+describe("_core.util cell size", function()
+    local tty = require("alt-img._core.tty")
+    local saved_query = tty.query
+
+    local function reload_util()
+        package.loaded["alt-img._core.util"] = nil
+        return require("alt-img._core.util")
+    end
+
+    after_each(function()
+        tty.query = saved_query
+    end)
+
+    it("seeds defaults appropriate to the host platform", function()
+        local util = reload_util()
+        local w, h = util.cell_pixel_size()
+        if vim.uv.os_uname().sysname == "Windows_NT" then
+            assert.equals(10, w)
+            assert.equals(20, h)
+        else
+            assert.equals(8, w)
+            assert.equals(16, h)
+        end
+    end)
+
+    it("updates cache when CSI 16t responds", function()
+        local sent
+        tty.query = function(payload, _opts, cb)
+            sent = payload
+            cb("\027[6;32;16t")
+        end
+        local util = reload_util()
+        util.query_cell_size()
+        assert.equals("\027[16t", sent)
+        local w, h = util.cell_pixel_size()
+        assert.equals(16, w)
+        assert.equals(32, h)
+    end)
+
+    it("keeps defaults when the response is malformed", function()
+        tty.query = function(_payload, _opts, cb)
+            cb("\027[?6c") -- DA1 reply, not CSI 16t — must not match
+        end
+        local util = reload_util()
+        util.query_cell_size()
+        local w, h = util.cell_pixel_size()
+        if vim.uv.os_uname().sysname == "Windows_NT" then
+            assert.equals(10, w)
+            assert.equals(20, h)
+        else
+            assert.equals(8, w)
+            assert.equals(16, h)
+        end
+    end)
+
+    it("fires _on_cell_size_change only when dimensions actually change", function()
+        tty.query = function(_payload, _opts, cb)
+            cb("\027[6;32;16t")
+        end
+        local util = reload_util()
+        local fires = 0
+        util._on_cell_size_change = function()
+            fires = fires + 1
+        end
+        util.query_cell_size()
+        assert.equals(1, fires)
+        -- Second invocation: same dimensions, no change fired (and the
+        -- _cell_size_queried gate also short-circuits the second call).
+        util._cell_size_queried = false
+        util.query_cell_size()
+        assert.equals(1, fires)
+    end)
+end)
+
 describe("_core.util.resolve_binary", function()
     local util = require("alt-img._core.util")
 

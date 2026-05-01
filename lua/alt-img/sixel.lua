@@ -8,6 +8,7 @@
 -- and emits the DCS sequence.
 
 local util = require("alt-img._core.util")
+local tty = require("alt-img._core.tty")
 local png = require("alt-img._core.png")
 local image = require("alt-img._core.image")
 local magick = require("alt-img._core.magick")
@@ -338,21 +339,21 @@ function M._supported(opts)
     if term:find("sixel", 1, true) or KNOWN_SIXEL_TERMS[term] then
         return true, "TERM=" .. term
     end
-    -- DA1 probe (CSI c) — response includes ;4 if sixel supported. When
-    -- vim.tty is absent on stable Neovim, we skip the probe entirely.
+    -- DA1 probe (CSI c) — response includes ;4 if sixel supported. The
+    -- internal tty.query helper is self-contained, so the probe always
+    -- runs; if the terminal does not respond, we fall through to a
+    -- `false` return after the timeout.
     local timeout = opts.timeout or 1000
     local done, ok, msg = false, false, nil
-    if vim.tty and vim.tty.query_csi then
-        vim.tty.query_csi("\027[c", { timeout = timeout }, function(resp)
-            if resp and resp:find(";4", 1, true) then
-                ok, msg = true, resp
-            end
-            done = true
-        end)
-        vim.wait(timeout + 100, function()
-            return done
-        end)
-    end
+    tty.query("\027[c", { timeout = timeout }, function(resp)
+        if resp and resp:find(";4", 1, true) then
+            ok, msg = true, resp
+        end
+        done = true
+    end)
+    vim.wait(timeout + 100, function()
+        return done
+    end)
     return ok, msg
 end
 

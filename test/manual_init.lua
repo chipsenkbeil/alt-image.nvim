@@ -155,11 +155,6 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
         "",
         "Neovim:",
         string.format("  version        = v%d.%d.%d", vim.version().major, vim.version().minor, vim.version().patch),
-        string.format("  vim.tty        = %s", vim.tty and "present" or "absent (probes skipped)"),
-        string.format(
-            "  query_csi      = %s",
-            (vim.tty and type(vim.tty.query_csi) == "function") and "available" or "not available"
-        ),
         "",
         "Active vim.ui.img provider:",
         "  module         = " .. provider_name(),

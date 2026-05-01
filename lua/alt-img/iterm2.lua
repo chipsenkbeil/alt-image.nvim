@@ -4,6 +4,7 @@
 --   runtime/lua/vim/ui/img/_iterm2.lua
 
 local util = require("alt-img._core.util")
+local tty = require("alt-img._core.tty")
 local render = require("alt-img._core.render")
 local png = require("alt-img._core.png")
 local image = require("alt-img._core.image")
@@ -375,21 +376,20 @@ function M._supported(opts)
         return true, "TERM_PROGRAM=" .. tp
     end
 
-    -- Probe via XTVERSION (CSI > q). When vim.tty is absent on stable Neovim,
-    -- we skip the probe entirely and fall through to a `false` return.
+    -- Probe via XTVERSION (CSI > q). The internal tty.query helper is
+    -- self-contained, so the probe always runs; if the terminal does
+    -- not respond, we fall through to a `false` return after the timeout.
     local timeout = opts.timeout or 1000
     local done, ok, msg = false, false, nil
-    if vim.tty and vim.tty.query_csi then
-        vim.tty.query_csi("\027[>q", { timeout = timeout }, function(resp)
-            if resp and (resp:find("iTerm2", 1, true) or resp:find("WezTerm", 1, true)) then
-                ok, msg = true, resp
-            end
-            done = true
-        end)
-        vim.wait(timeout + 100, function()
-            return done
-        end)
-    end
+    tty.query("\027[>q", { timeout = timeout }, function(resp)
+        if resp and (resp:find("iTerm2", 1, true) or resp:find("WezTerm", 1, true)) then
+            ok, msg = true, resp
+        end
+        done = true
+    end)
+    vim.wait(timeout + 100, function()
+        return done
+    end)
     return ok, msg
 end
 

@@ -1,14 +1,29 @@
 -- alt-img internal utilities
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_util.lua
+
+local tty = require("alt-img._core.tty")
+
+-- Cell pixel-size fallback defaults, used only when the CSI 16t query
+-- fails to elicit a response. Unix terminals inherit the X11/VGA 8x16
+-- fixed-font convention; Windows Terminal's Cascadia Mono ~12pt is
+-- closer to 10x20. Modern terminals respond to CSI 16t and the queried
+-- value supersedes these immediately.
+local _default_w, _default_h = (function()
+    if vim.uv.os_uname().sysname == "Windows_NT" then
+        return 10, 20
+    end
+    return 8, 16
+end)()
+
 ---@class altimg._util
 ---@field private _cell_width_px integer
 ---@field private _cell_height_px integer
 ---@field private _cell_size_queried boolean
 ---@field private _on_cell_size_change? fun(w: integer, h: integer)
 local M = {
-    _cell_width_px = 8,
-    _cell_height_px = 16,
+    _cell_width_px = _default_w,
+    _cell_height_px = _default_h,
     _cell_size_queried = false,
     _on_cell_size_change = nil,
 }
@@ -128,82 +143,58 @@ function M.cell_pixel_size()
     return M._cell_width_px, M._cell_height_px
 end
 
----Query cell pixel dimensions synchronously via TIOCGWINSZ ioctl.
----Updates cached values immediately. Falls back to 8x16 defaults on failure.
+---Query the terminal for cell pixel dimensions via CSI 16t.
+---Synchronously waits up to 500ms for the response. Updates cached
+---values on success; on failure (no response, terminal does not
+---support CSI 16t) the platform defaults remain.
 ---@private
-M._query_cell_size_ioctl = (function()
-    local ffi = require("ffi")
-
-    pcall(
-        ffi.cdef,
-        [[
-    struct nvim_img_winsize {
-      unsigned short ws_row;
-      unsigned short ws_col;
-      unsigned short ws_xpixel;
-      unsigned short ws_ypixel;
-    };
-    int open(const char *path, int flags);
-    int close(int fd);
-    int ioctl(int fd, unsigned long request, ...);
-  ]]
-    )
-
-    -- TIOCGWINSZ: Linux uses 0x5413, BSD-derived systems (macOS, FreeBSD, etc.) use 0x40087468
-    local TIOCGWINSZ = (vim.uv.os_uname().sysname == "Linux") and 0x5413 or 0x40087468
-    local STDERR_FILENO = 2
-
-    return function()
-        -- Use stderr (fd 2) directly rather than opening /dev/tty, because
-        -- Neovim's server process may not have a controlling terminal (setsid)
-        -- but stderr is still connected to the terminal pty.
-        ---@type {ws_xpixel:integer, ws_ypixel:integer, ws_col:integer, ws_row:integer}
-        local ws = ffi.new("struct nvim_img_winsize")
-        local rc = ffi.C.ioctl(STDERR_FILENO, TIOCGWINSZ, ws) ---@type integer
-
-        if rc < 0 then
-            return
+function M._query_cell_size_csi16t()
+    local timeout = 500
+    local done = false
+    tty.query("\027[16t", { timeout = timeout }, function(resp)
+        -- Response: ESC [ 6 ; <height_px> ; <width_px> t
+        local h, w = resp:match("^\027%[6;(%d+);(%d+)t$")
+        if h and w then
+            local new_w, new_h = tonumber(w), tonumber(h)
+            if new_w and new_h and new_w > 0 and new_h > 0 then
+                local changed = new_w ~= M._cell_width_px or new_h ~= M._cell_height_px
+                M._cell_width_px = new_w
+                M._cell_height_px = new_h
+                if changed and M._on_cell_size_change then
+                    M._on_cell_size_change(new_w, new_h)
+                end
+            end
+            done = true
+            return true
         end
+        return false
+    end)
+    vim.wait(timeout + 100, function()
+        return done
+    end)
+end
 
-        if ws.ws_xpixel == 0 or ws.ws_ypixel == 0 or ws.ws_col == 0 or ws.ws_row == 0 then
-            return
-        end
-
-        local new_w = math.floor(ws.ws_xpixel / ws.ws_col)
-        local new_h = math.floor(ws.ws_ypixel / ws.ws_row)
-
-        if new_w <= 0 or new_h <= 0 then
-            return
-        end
-
-        local changed = new_w ~= M._cell_width_px or new_h ~= M._cell_height_px
-        M._cell_width_px = new_w
-        M._cell_height_px = new_h
-
-        if changed and M._on_cell_size_change then
-            M._on_cell_size_change(new_w, new_h)
-        end
-    end
-end)()
-
----Query the terminal for cell pixel dimensions (synchronous via ioctl).
----Values are available immediately after this call.
+---Query the terminal for cell pixel dimensions (synchronous via CSI 16t).
+---Values are available immediately after this call. Cache is invalidated
+---on VimResized and UIEnter so the next call re-queries.
 function M.query_cell_size()
     if M._cell_size_queried then
         return
     end
     M._cell_size_queried = true
-
-    M._query_cell_size_ioctl()
-
-    -- Re-query on terminal resize (cell size may change with font/window changes).
-    -- Registered once since query_cell_size() guards with _cell_size_queried.
-    vim.api.nvim_create_autocmd("VimResized", {
-        callback = function()
-            M._query_cell_size_ioctl()
-        end,
-    })
+    M._query_cell_size_csi16t()
 end
+
+-- Invalidate the cache on resize / UI re-attach. The augroup pattern
+-- with `clear = true` keeps reloads (tests, :Lazy reload) from stacking
+-- duplicate handlers.
+local AUGROUP = vim.api.nvim_create_augroup("alt-img.util", { clear = true })
+vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
+    group = AUGROUP,
+    callback = function()
+        M._cell_size_queried = false
+    end,
+})
 
 -- Cached executable lookups for external tools (magick, convert, img2sixel).
 -- The cache survives the life of the Neovim session; tests that mock
