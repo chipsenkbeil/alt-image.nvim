@@ -207,7 +207,7 @@ describe("_core.util cell size", function()
     end)
 end)
 
-describe("_core.util iterm2_scale", function()
+describe("_core.util terminal_pixel_scale", function()
     local tty = require("alt-img._core.tty")
     local saved_query = tty.query
     local saved_term_program = vim.env.TERM_PROGRAM
@@ -217,74 +217,132 @@ describe("_core.util iterm2_scale", function()
         return require("alt-img._core.util")
     end
 
+    -- Build a tty.query mock that responds to a sequence of payload patterns
+    -- with canned replies. `responses` is a list of { match=pattern, reply=string }
+    -- entries; first match wins. Unmatched payloads silently no-op (the
+    -- caller will time out — vim.wait short timeouts in the unit tests).
+    local function mock_tty_responses(responses)
+        tty.query = function(payload, _opts, cb)
+            for _, r in ipairs(responses) do
+                if payload:match(r.match) then
+                    cb(r.reply)
+                    return
+                end
+            end
+        end
+    end
+
     after_each(function()
         tty.query = saved_query
         vim.env.TERM_PROGRAM = saved_term_program
     end)
 
-    it("returns 1 when TERM_PROGRAM is not iTerm.app and never queries", function()
-        vim.env.TERM_PROGRAM = "WezTerm"
-        local sent = false
-        tty.query = function(payload, _opts, _cb)
-            sent = true
-        end
-        local util = reload_util()
-        assert.equals(1, util.iterm2_scale())
-        assert.is_false(sent)
-    end)
-
-    it("parses scale from OSC 1337 ReportCellSize on iTerm2", function()
+    it("OSC 1337: parses scale on iTerm.app", function()
         vim.env.TERM_PROGRAM = "iTerm.app"
-        local sent
-        tty.query = function(payload, _opts, cb)
-            sent = payload
-            cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
-        end
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;2.0\007" },
+        })
         local util = reload_util()
-        assert.equals(2, util.iterm2_scale())
-        assert.equals("\027]1337;ReportCellSize\007", sent)
+        assert.equals(2, util.terminal_pixel_scale())
     end)
 
-    it("keeps the default of 1 when iTerm2 doesn't respond", function()
+    it("OSC 1337: parses scale on WezTerm", function()
+        vim.env.TERM_PROGRAM = "WezTerm"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=20.0;10.0;2.0\007" },
+        })
+        local util = reload_util()
+        assert.equals(2, util.terminal_pixel_scale())
+    end)
+
+    it("falls back to CSI 14t/18t cross-check when OSC 1337 is unavailable", function()
+        -- Foot/mlterm/contour don't respond to OSC 1337, but DO answer
+        -- CSI 14t and CSI 18t. Scenario: 64 cols × 32 rows window with
+        -- 8×16 cells. Logical window = 512×512; on a 2× HiDPI display
+        -- the terminal reports CSI 14t in physical pixels (1024×1024)
+        -- while CSI 16t stays logical (8×16). The implied per-cell
+        -- pixel size from 14t/18t is 16×32 — exactly 2× CSI 16t — so
+        -- we infer scale=2.
+        vim.env.TERM_PROGRAM = "foot"
+        mock_tty_responses({
+            -- CSI 16t reply format: ESC [ 6 ; <h> ; <w> t
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            -- CSI 14t reply format: ESC [ 4 ; <h> ; <w> t — PHYSICAL pixels
+            { match = "%[14t", reply = "\027[4;1024;1024t" },
+            -- CSI 18t reply format: ESC [ 8 ; <rows> ; <cols> t
+            { match = "%[18t", reply = "\027[8;32;64t" },
+        })
+        local util = reload_util()
+        assert.equals(2, util.terminal_pixel_scale())
+    end)
+
+    it("CSI fallback returns 1 when window pixels and cells agree", function()
+        -- Same window geometry but CSI 14t reports LOGICAL (512×512).
+        -- Implied cell size = CSI 16t = no scaling.
+        vim.env.TERM_PROGRAM = "foot"
+        mock_tty_responses({
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[14t", reply = "\027[4;512;512t" },
+            { match = "%[18t", reply = "\027[8;32;64t" },
+        })
+        local util = reload_util()
+        assert.equals(1, util.terminal_pixel_scale())
+    end)
+
+    it("returns 1 when OSC 1337 doesn't respond and CSI queries fail too", function()
         vim.env.TERM_PROGRAM = "iTerm.app"
         tty.query = function(_payload, _opts, _cb)
-            -- Simulate no response (callback never fires).
+            -- never responds
         end
         local util = reload_util()
-        assert.equals(1, util.iterm2_scale())
+        assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("ignores malformed responses and stays at 1", function()
+    it("ignores malformed OSC 1337 responses and falls through", function()
         vim.env.TERM_PROGRAM = "iTerm.app"
-        tty.query = function(_payload, _opts, cb)
-            cb("\027[?6c") -- DA1 reply, not OSC 1337
-        end
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027[?6c" },
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[14t", reply = "\027[4;256;512t" },
+            { match = "%[18t", reply = "\027[8;32;64t" },
+        })
         local util = reload_util()
-        assert.equals(1, util.iterm2_scale())
+        -- OSC 1337 reply doesn't match; CSI fallback shows ratio=1, so 1.
+        assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("clamps fractional or below-1 scale to integer >= 1", function()
+    it("rejects sub-1 OSC 1337 scale values", function()
         vim.env.TERM_PROGRAM = "iTerm.app"
-        tty.query = function(_payload, _opts, cb)
-            cb("\027]1337;ReportCellSize=24.0;12.0;0.5\007")
-        end
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;0.5\007" },
+        })
         local util = reload_util()
-        -- 0.5 is below 1; the parser keeps the default of 1.
-        assert.equals(1, util.iterm2_scale())
+        assert.equals(1, util.terminal_pixel_scale())
     end)
 
     it("queries only once and caches the result", function()
         vim.env.TERM_PROGRAM = "iTerm.app"
         local calls = 0
         tty.query = function(_payload, _opts, cb)
-            calls = calls + 1
-            cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+            if _payload:match("1337;ReportCellSize") then
+                calls = calls + 1
+                cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+            end
         end
         local util = reload_util()
-        assert.equals(2, util.iterm2_scale())
-        assert.equals(2, util.iterm2_scale())
-        assert.equals(2, util.iterm2_scale())
+        assert.equals(2, util.terminal_pixel_scale())
+        assert.equals(2, util.terminal_pixel_scale())
+        assert.equals(2, util.terminal_pixel_scale())
         assert.equals(1, calls)
+    end)
+
+    it("iterm2_scale alias still works (back-compat)", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;2.0\007" },
+        })
+        local util = reload_util()
+        assert.equals(2, util.iterm2_scale())
     end)
 end)
 

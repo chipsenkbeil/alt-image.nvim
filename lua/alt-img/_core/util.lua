@@ -185,35 +185,44 @@ function M.query_cell_size()
     M._query_cell_size_csi16t()
 end
 
--- iTerm2 retina-scale tracking. iTerm2's sixel renderer uses physical
--- (retina) pixels rather than logical, so a sixel encoded at the cell
--- pixel size (8x16) renders at half the requested area on a 2x display.
--- This value is the multiplier the sixel encoder applies on top of
--- cell_pixel_size to compensate; default 1 (non-retina or non-iTerm2),
--- queried via OSC 1337 ReportCellSize where supported.
-M._iterm2_scale = 1
-M._iterm2_scale_queried = false
+-- Sixel pixel-scale tracking. Some terminals (iTerm2, WezTerm, …) report
+-- cell sizes in LOGICAL pixels via CSI 16t but render sixel at PHYSICAL
+-- pixels — so a sixel encoded at the cell pixel size renders at half
+-- the requested area on a 2x retina display. This value is the multiplier
+-- the sixel encoder applies on top of cell_pixel_size to compensate.
+-- Default 1; populated via OSC 1337 ReportCellSize for iTerm2/WezTerm and
+-- via CSI 14t/18t cross-check for everyone else (the same trick chafa uses).
+M._terminal_pixel_scale = 1
+M._terminal_pixel_scale_queried = false
 
+-- Terminals known to implement iTerm2's `OSC 1337 ; ReportCellSize`,
+-- which echoes back the screen scale factor as the third field. Other
+-- terminals tend to ignore unrecognized OSC 1337 verbs, but a few echo
+-- them as text — so we gate the send.
+local OSC_1337_REPORT_CELL_SIZE_TERMS = {
+    ["iTerm.app"] = true,
+    ["WezTerm"] = true,
+}
+
+---Try iTerm2-style OSC 1337 ReportCellSize first. Returns true if the
+---terminal answered with a parseable scale (and `M._terminal_pixel_scale`
+---was updated).
 ---@private
-function M._query_iterm2_scale_osc1337()
-    -- Other terminals don't honor OSC 1337 ReportCellSize and we shouldn't
-    -- send it speculatively — some respond with garbage, some echo as
-    -- text. Gate on TERM_PROGRAM so the query only fires where it's known
-    -- safe.
-    if vim.env.TERM_PROGRAM ~= "iTerm.app" then
-        return
+---@return boolean
+function M._query_scale_osc1337()
+    if not OSC_1337_REPORT_CELL_SIZE_TERMS[vim.env.TERM_PROGRAM] then
+        return false
     end
     local timeout = 500
-    local done = false
+    local done, ok = false, false
     tty.query("\027]1337;ReportCellSize\007", { timeout = timeout }, function(resp)
-        -- iTerm2 replies with: ESC ] 1337 ; ReportCellSize=<h>;<w>;<scale> BEL
-        -- Some builds emit ST (`\e\\`) instead of BEL — we don't care which,
-        -- the captured `scale` is what matters.
+        -- Reply: ESC ] 1337 ; ReportCellSize=<h>;<w>;<scale> BEL  (or ST)
         local _h, _w, scale = (resp or ""):match("ReportCellSize=([%d%.]+);([%d%.]+);([%d%.]+)")
         if scale then
             local n = tonumber(scale)
             if n and n >= 1 then
-                M._iterm2_scale = math.floor(n)
+                M._terminal_pixel_scale = math.floor(n)
+                ok = true
             end
             done = true
             return true
@@ -223,20 +232,102 @@ function M._query_iterm2_scale_osc1337()
     vim.wait(timeout + 100, function()
         return done
     end)
+    return ok
 end
 
----Return the cached iTerm2 retina scale factor (1, 2, …). Triggers a
----synchronous OSC 1337 ReportCellSize query on first call so the value
----reflects the host terminal's actual scale, then caches until a
----VimResized/UIEnter invalidates. On non-iTerm2 terminals always 1.
----@return integer
-function M.iterm2_scale()
-    if not M._iterm2_scale_queried then
-        M._iterm2_scale_queried = true
-        M._query_iterm2_scale_osc1337()
+---Generic fallback: CSI 14t reports window size in pixels, CSI 18t reports
+---it in characters. The implied per-cell pixel size from those two should
+---match CSI 16t's reported cell size on terminals that report consistently.
+---When CSI 14t is reported in PHYSICAL pixels but CSI 16t/18t in LOGICAL
+---(common on HiDPI for terminals that don't account for backing scale),
+---the ratio reveals the scale factor. Returns true if a >1 scale was
+---detected.
+---@private
+---@return boolean
+function M._query_scale_geometry_xtwinops()
+    -- Need cell_pixel_size to compare against; trigger a query if cold.
+    M.query_cell_size()
+    local cell_w, cell_h = M.cell_pixel_size()
+    if not cell_w or cell_w <= 0 or cell_h <= 0 then
+        return false
     end
-    return M._iterm2_scale
+
+    local timeout = 300
+    local win_w, win_h, cols, rows
+    local done14, done18 = false, false
+
+    -- CSI 14t — `\e[4;<h>;<w>t` (window in pixels).
+    tty.query("\027[14t", { timeout = timeout }, function(resp)
+        local h, w = (resp or ""):match("^\027%[4;(%d+);(%d+)t$")
+        if h and w then
+            win_h, win_w = tonumber(h), tonumber(w)
+            done14 = true
+            return true
+        end
+        return false
+    end)
+    vim.wait(timeout + 50, function()
+        return done14
+    end)
+
+    if not (win_w and win_h) then
+        return false
+    end
+
+    -- CSI 18t — `\e[8;<rows>;<cols>t` (window in characters).
+    tty.query("\027[18t", { timeout = timeout }, function(resp)
+        local r, c = (resp or ""):match("^\027%[8;(%d+);(%d+)t$")
+        if r and c then
+            rows, cols = tonumber(r), tonumber(c)
+            done18 = true
+            return true
+        end
+        return false
+    end)
+    vim.wait(timeout + 50, function()
+        return done18
+    end)
+
+    if not (cols and rows and cols > 0 and rows > 0) then
+        return false
+    end
+
+    -- If the window-derived cell size is meaningfully larger than CSI 16t's,
+    -- the terminal is reporting CSI 16t logically while CSI 14t in physical
+    -- pixels — exactly the retina-mismatch case. Round to the nearest
+    -- integer (typical values are 1 or 2; allow 3 for >2x setups).
+    local derived_w = win_w / cols
+    local derived_h = win_h / rows
+    local ratio_w = derived_w / cell_w
+    local ratio_h = derived_h / cell_h
+    -- Use the smaller of the two so a fractional padding row/column doesn't
+    -- inflate the result. Both should match in practice on a clean window.
+    local ratio = math.min(ratio_w, ratio_h)
+    if ratio >= 1.5 then
+        M._terminal_pixel_scale = math.max(1, math.floor(ratio + 0.5))
+        return true
+    end
+    return false
 end
+
+---Return the cached terminal pixel scale factor (1, 2, …). Triggers a
+---synchronous OSC 1337 ReportCellSize query on first call (iTerm2 /
+---WezTerm), falling back to a CSI 14t/18t × 16t cross-check for other
+---terminals. Caches until VimResized/UIEnter invalidates.
+---@return integer
+function M.terminal_pixel_scale()
+    if not M._terminal_pixel_scale_queried then
+        M._terminal_pixel_scale_queried = true
+        if not M._query_scale_osc1337() then
+            M._query_scale_geometry_xtwinops()
+        end
+    end
+    return M._terminal_pixel_scale
+end
+
+-- Backwards-compatible alias for older call-sites that named this iTerm2-
+-- specific. New code should call `terminal_pixel_scale()`.
+M.iterm2_scale = M.terminal_pixel_scale
 
 -- Invalidate the cache on resize / UI re-attach. The augroup pattern
 -- with `clear = true` keeps reloads (tests, :Lazy reload) from stacking
@@ -246,7 +337,7 @@ vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
     group = AUGROUP,
     callback = function()
         M._cell_size_queried = false
-        M._iterm2_scale_queried = false
+        M._terminal_pixel_scale_queried = false
     end,
 })
 

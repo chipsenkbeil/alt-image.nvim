@@ -230,7 +230,7 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
     -- from iTerm2's OSC 1337 ReportCellSize (= screen scale factor; 2 on
     -- retina, 1 elsewhere; 1 on non-iTerm2 terminals).
     table.insert(lines, string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale)))
-    table.insert(lines, string.format("  iterm2 scale (OSC 1337)         = %d×", util.iterm2_scale()))
+    table.insert(lines, string.format("  terminal_pixel_scale (auto)     = %d×", util.terminal_pixel_scale()))
 
     -- Active placements per provider, with their resolved opts (post-derive_dims).
     -- Useful when the displayed image looks wrong-sized — opts.width/height
