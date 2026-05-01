@@ -1,12 +1,12 @@
--- alt-image internal wrapper around the ImageMagick CLI (`magick` / `convert`).
--- Honors `vim.g.alt_image.magick` per the alt-image config contract — see
+-- alt-img internal wrapper around the ImageMagick CLI (`magick` / `convert`).
+-- Honors `vim.g.alt_img.magick` per the alt-img config contract — see
 -- `_core/config.lua`. Returns nil from every helper on any failure so the
 -- caller can fall back to the pure-Lua paths.
 
 local M = {}
 
-local _util = require("alt-image._core.util")
-local _config = require("alt-image._core.config")
+local _util = require("alt-img._core.util")
+local _config = require("alt-img._core.config")
 
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
@@ -27,7 +27,7 @@ local function run(cmd, stdin)
     if not ok or not res or res.code ~= 0 then
         if res and res.stderr and #res.stderr > 0 then
             vim.schedule(function()
-                vim.notify_once(("alt-image: %s failed: %s"):format(cmd[1], res.stderr), vim.log.levels.DEBUG)
+                vim.notify_once(("alt-img: %s failed: %s"):format(cmd[1], res.stderr), vim.log.levels.DEBUG)
             end)
         end
         return nil

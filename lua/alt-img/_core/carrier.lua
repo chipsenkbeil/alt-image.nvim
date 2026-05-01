@@ -16,12 +16,12 @@
 -- the carrier tightens src to the visible sub-rect and providers crop +
 -- re-encode before emitting.
 
-local util = require("alt-image._core.util")
+local util = require("alt-img._core.util")
 
 local M = {}
 
-local NS = vim.api.nvim_create_namespace("alt-image.carrier")
-local AUGROUP = vim.api.nvim_create_augroup("alt-image.carrier", { clear = true })
+local NS = vim.api.nvim_create_namespace("alt-img.carrier")
+local AUGROUP = vim.api.nvim_create_augroup("alt-img.carrier", { clear = true })
 
 -- carriers[key] = { provider = provider_module, id = provider_id,
 --                   opts = opts, kind = 'editor'|'buffer',
@@ -162,7 +162,7 @@ local function resolve_screen_positions(c)
                     -- `min(topfill, img_h)` rows of the image render at win_top onward.
                     -- Approximation/caveat: if other extmarks above topline ALSO
                     -- contribute to topfill, this over-attributes rows to our image.
-                    -- For alt-image's typical one-image-per-buffer use it's fine.
+                    -- For alt-img's typical one-image-per-buffer use it's fine.
                     local visible = math.min(topfill, img_h)
                     local skipped = img_h - visible
                     image_anchor_row = win_top
@@ -211,13 +211,13 @@ function M.register(provider, id, opts)
         c.winid, c.bufnr = open_editor_carrier(opts)
     elseif opts.relative == "buffer" then
         if not opts.buf then
-            error("alt-image: relative=buffer requires opts.buf", 3)
+            error("alt-img: relative=buffer requires opts.buf", 3)
         end
         c.kind = "buffer"
         c.bufnr = opts.buf
         c.extmark_id = place_buffer_extmark(opts)
     else
-        error("alt-image: unsupported relative " .. tostring(opts.relative), 3)
+        error("alt-img: unsupported relative " .. tostring(opts.relative), 3)
     end
     c.last_positions = resolve_screen_positions(c)
     carriers[provider_key(provider, id)] = c

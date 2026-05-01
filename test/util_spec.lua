@@ -1,5 +1,5 @@
 local H = require("test.helpers")
-local senc = require("alt-image.sixel._encode")
+local senc = require("alt-img.sixel._encode")
 
 describe("harness", function()
     it("runs a passing test", function()
@@ -12,7 +12,7 @@ describe("harness", function()
 end)
 
 describe("_png", function()
-    local png = require("alt-image._core.png")
+    local png = require("alt-img._core.png")
 
     it("decodes the 4x4 fixture", function()
         local f = assert(io.open("test/fixtures/4x4.png", "rb"))
@@ -43,7 +43,7 @@ describe("helpers", function()
 end)
 
 describe("_util.png_dimensions", function()
-    local util = require("alt-image._core.util")
+    local util = require("alt-img._core.util")
 
     it("parses width and height from a real PNG", function()
         local f = assert(io.open("test/fixtures/4x4.png", "rb"))
@@ -70,7 +70,7 @@ describe("_util.png_dimensions", function()
 end)
 
 describe("_util.clip_to_bounds", function()
-    local util = require("alt-image._core.util")
+    local util = require("alt-img._core.util")
 
     it("image fully inside bounds → src covers full image", function()
         local p = util.clip_to_bounds(5, 5, 4, 4, 1, 1, 24, 80)
@@ -134,7 +134,7 @@ describe("_util.clip_to_bounds", function()
 end)
 
 describe("_core.util.resolve_binary", function()
-    local util = require("alt-image._core.util")
+    local util = require("alt-img._core.util")
 
     local function with_executable(executable_for, fn)
         local saved = vim.fn.executable
@@ -201,19 +201,19 @@ describe("_core.util.resolve_binary", function()
 end)
 
 describe("_core.config", function()
-    local config = require("alt-image._core.config")
+    local config = require("alt-img._core.config")
 
     local function with_g(value, fn)
-        local saved = vim.g.alt_image
-        vim.g.alt_image = value
+        local saved = vim.g.alt_img
+        vim.g.alt_img = value
         local ok, err = pcall(fn)
-        vim.g.alt_image = saved
+        vim.g.alt_img = saved
         if not ok then
             error(err, 0)
         end
     end
 
-    it("returns full defaults when vim.g.alt_image is unset", function()
+    it("returns full defaults when vim.g.alt_img is unset", function()
         with_g(nil, function()
             local c = config.read()
             assert.same({ "magick", "convert" }, c.magick)

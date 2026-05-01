@@ -7,13 +7,13 @@ local function pos(r, c, w, h)
     return { { row = r, col = c, src = { x = 0, y = 0, w = w or 4, h = h or 4 } } }
 end
 
-describe("alt-image._core.render", function()
+describe("alt-img._core.render", function()
     local render
 
     before_each(function()
         H.setup_capture()
-        package.loaded["alt-image._core.render"] = nil
-        render = require("alt-image._core.render")
+        package.loaded["alt-img._core.render"] = nil
+        render = require("alt-img._core.render")
     end)
 
     it("register + flush emits via provider._emit_at", function()

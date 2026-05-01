@@ -1,19 +1,19 @@
 -- Top-level dispatcher. Detects which protocol the current terminal
 -- supports and exposes the same set/get/del/_supported surface so that
---   vim.ui.img = require('alt-image')
+--   vim.ui.img = require('alt-img')
 -- works identically to vim.ui.img on a kitty-supporting terminal. Users who
 -- want to skip detection require a specific provider directly:
---   vim.ui.img = require('alt-image.iterm2')
---   vim.ui.img = require('alt-image.sixel')
+--   vim.ui.img = require('alt-img.iterm2')
+--   vim.ui.img = require('alt-img.sixel')
 
 local M = {}
 
 local PROVIDERS = {
     iterm2 = function()
-        return require("alt-image.iterm2")
+        return require("alt-img.iterm2")
     end,
     sixel = function()
-        return require("alt-image.sixel")
+        return require("alt-img.sixel")
     end,
 }
 
@@ -29,8 +29,8 @@ local function detect()
         end
     end
     error(
-        "alt-image: no supported image protocol detected. "
-            .. 'Set vim.ui.img = require("alt-image.iterm2") or .sixel manually.'
+        "alt-img: no supported image protocol detected. "
+            .. 'Set vim.ui.img = require("alt-img.iterm2") or .sixel manually.'
     )
 end
 
@@ -40,7 +40,7 @@ function M._provider()
 end
 
 -- Test helper: clear the cached provider so a subsequent _provider() call
--- redetects from current env / vim.g.alt_image.
+-- redetects from current env / vim.g.alt_img.
 function M._reset_provider_cache()
     cached_provider = nil
 end

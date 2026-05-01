@@ -34,7 +34,7 @@ local function deep_eq(a, b)
     return vim.deep_equal(a, b)
 end
 
--- Add lua/ to runtimepath so spec files can `require('alt-image.*')`.
+-- Add lua/ to runtimepath so spec files can `require('alt-img.*')`.
 -- Done before redefining _G.assert because vim.opt internals call assert().
 local cwd = vim.uv.cwd()
 vim.opt.runtimepath:prepend(cwd)

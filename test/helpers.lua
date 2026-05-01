@@ -70,7 +70,7 @@ function H.parse_sixel_seq(s)
     return out
 end
 
--- Reset all alt-image module loads and require the named provider fresh.
+-- Reset all alt-img module loads and require the named provider fresh.
 -- Use in spec before_each blocks to avoid stale state across tests.
 --
 -- External tools (img2sixel / magick / convert) are disabled here so existing
@@ -78,18 +78,18 @@ end
 -- which external tools happen to be installed on the test host. The dedicated
 -- external-tools spec opts back in explicitly.
 function H.fresh_provider(name)
-    package.loaded["alt-image"] = nil
-    package.loaded["alt-image.iterm2"] = nil
-    package.loaded["alt-image.sixel"] = nil
-    package.loaded["alt-image._core.render"] = nil
-    package.loaded["alt-image._core.carrier"] = nil
-    package.loaded["alt-image._core.magick"] = nil
-    package.loaded["alt-image.sixel._libsixel"] = nil
-    vim.g.alt_image = { magick = false, img2sixel = false } -- pure-Lua paths
+    package.loaded["alt-img"] = nil
+    package.loaded["alt-img.iterm2"] = nil
+    package.loaded["alt-img.sixel"] = nil
+    package.loaded["alt-img._core.render"] = nil
+    package.loaded["alt-img._core.carrier"] = nil
+    package.loaded["alt-img._core.magick"] = nil
+    package.loaded["alt-img.sixel._libsixel"] = nil
+    vim.g.alt_img = { magick = false, img2sixel = false } -- pure-Lua paths
     pcall(function()
-        require("alt-image._core.util")._reset_executable_cache()
+        require("alt-img._core.util")._reset_executable_cache()
     end)
-    return require("alt-image." .. name)
+    return require("alt-img." .. name)
 end
 
 -- Mock the env vars / TERM_PROGRAM for detection tests.

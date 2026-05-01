@@ -697,9 +697,9 @@ local libz_compress -- function(data, level) -> string|nil
 local _libz_ok = pcall(function()
     local ffi = require("ffi")
     ffi.cdef([[
-    typedef unsigned long alt_image_uLongf;
-    int compress2(uint8_t *dest, alt_image_uLongf *destLen,
-                  const uint8_t *source, alt_image_uLongf sourceLen, int level);
+    typedef unsigned long alt_img_uLongf;
+    int compress2(uint8_t *dest, alt_img_uLongf *destLen,
+                  const uint8_t *source, alt_img_uLongf sourceLen, int level);
   ]])
     local libz = ffi.load("z")
 
@@ -707,7 +707,7 @@ local _libz_ok = pcall(function()
         local src_len = #data
         local dst_capacity = src_len + math.ceil(src_len / 1000) + 32
         local dst = ffi.new("uint8_t[?]", dst_capacity)
-        local dst_len = ffi.new("alt_image_uLongf[1]", dst_capacity)
+        local dst_len = ffi.new("alt_img_uLongf[1]", dst_capacity)
         local src = ffi.cast("const uint8_t*", data)
         local rc = libz.compress2(dst, dst_len, src, src_len, level or 6)
         if rc ~= 0 then

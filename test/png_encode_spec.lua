@@ -1,7 +1,7 @@
 -- test/png_encode_spec.lua
 -- Round-trip tests for the merged PNG codec — encode is fed to decode to
 -- verify it produces a valid PNG.
-local png = require("alt-image._core.png")
+local png = require("alt-img._core.png")
 local png_encode = png -- legacy alias: encoder + has_libz live on the same module now
 
 describe("_core.png.encode", function()

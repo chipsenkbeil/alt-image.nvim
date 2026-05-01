@@ -1,6 +1,6 @@
 -- test/accel_spec.lua
 -- Tests for the external-tool dispatchers in sixel/_encode.lua and
--- _core/magick.lua, plus the vim.g.alt_image.magick / img2sixel
+-- _core/magick.lua, plus the vim.g.alt_img.magick / img2sixel
 -- binary-resolution semantics. We mock vim.system + vim.fn.executable so no
 -- real subprocess ever runs.
 
@@ -9,13 +9,13 @@ local H = require("test.helpers")
 -- Stand up a controlled environment for one test:
 -- - executable_for: { [name]=true|false } overrides for vim.fn.executable
 -- - system_handler: function(cmd, opts) -> { code, stdout } (or nil to error)
--- - g_alt_image:    table assigned to vim.g.alt_image
+-- - g_alt_img:    table assigned to vim.g.alt_img
 -- Returns the fresh _sixel_encode module + a `calls` array recording each
 -- vim.system invocation as { cmd = {...}, opts = {...} }.
-local function with_mocks(executable_for, system_handler, g_alt_image)
+local function with_mocks(executable_for, system_handler, g_alt_img)
     local saved_system = vim.system
     local saved_executable = vim.fn.executable
-    local saved_g = vim.g.alt_image
+    local saved_g = vim.g.alt_img
 
     vim.fn.executable = function(name)
         local v = executable_for[name]
@@ -41,32 +41,32 @@ local function with_mocks(executable_for, system_handler, g_alt_image)
 
     -- Force fresh module loads so the mocks take effect through cached
     -- requires inside the dispatchers.
-    package.loaded["alt-image"] = nil
-    package.loaded["alt-image._core.util"] = nil
-    package.loaded["alt-image._core.png"] = nil
-    package.loaded["alt-image._core.magick"] = nil
-    package.loaded["alt-image.sixel._encode"] = nil
-    package.loaded["alt-image.sixel._libsixel"] = nil
-    vim.g.alt_image = g_alt_image
-    local senc = require("alt-image.sixel._encode")
+    package.loaded["alt-img"] = nil
+    package.loaded["alt-img._core.util"] = nil
+    package.loaded["alt-img._core.png"] = nil
+    package.loaded["alt-img._core.magick"] = nil
+    package.loaded["alt-img.sixel._encode"] = nil
+    package.loaded["alt-img.sixel._libsixel"] = nil
+    vim.g.alt_img = g_alt_img
+    local senc = require("alt-img.sixel._encode")
     -- Belt-and-suspenders: clear the executable cache.
-    require("alt-image._core.util")._reset_executable_cache()
+    require("alt-img._core.util")._reset_executable_cache()
 
     return senc,
         calls,
         function()
             vim.system = saved_system
             vim.fn.executable = saved_executable
-            vim.g.alt_image = saved_g
+            vim.g.alt_img = saved_g
         end
 end
 
 describe("_magick.binary()", function()
-    local function fresh_magick(executable_for, g_alt_image)
-        package.loaded["alt-image._core.util"] = nil
-        package.loaded["alt-image._core.magick"] = nil
+    local function fresh_magick(executable_for, g_alt_img)
+        package.loaded["alt-img._core.util"] = nil
+        package.loaded["alt-img._core.magick"] = nil
         local saved_executable = vim.fn.executable
-        local saved_g = vim.g.alt_image
+        local saved_g = vim.g.alt_img
         vim.fn.executable = function(name)
             local v = executable_for[name]
             if v == true then
@@ -77,12 +77,12 @@ describe("_magick.binary()", function()
             end
             return saved_executable(name)
         end
-        vim.g.alt_image = g_alt_image
-        require("alt-image._core.util")._reset_executable_cache()
-        return require("alt-image._core.magick"),
+        vim.g.alt_img = g_alt_img
+        require("alt-img._core.util")._reset_executable_cache()
+        return require("alt-img._core.magick"),
             function()
                 vim.fn.executable = saved_executable
-                vim.g.alt_image = saved_g
+                vim.g.alt_img = saved_g
             end
     end
 
@@ -204,11 +204,11 @@ describe("_magick.binary()", function()
 end)
 
 describe("_libsixel.binary()", function()
-    local function fresh_libsixel(executable_for, g_alt_image)
-        package.loaded["alt-image._core.util"] = nil
-        package.loaded["alt-image.sixel._libsixel"] = nil
+    local function fresh_libsixel(executable_for, g_alt_img)
+        package.loaded["alt-img._core.util"] = nil
+        package.loaded["alt-img.sixel._libsixel"] = nil
         local saved_executable = vim.fn.executable
-        local saved_g = vim.g.alt_image
+        local saved_g = vim.g.alt_img
         vim.fn.executable = function(name)
             local v = executable_for[name]
             if v == true then
@@ -219,12 +219,12 @@ describe("_libsixel.binary()", function()
             end
             return saved_executable(name)
         end
-        vim.g.alt_image = g_alt_image
-        require("alt-image._core.util")._reset_executable_cache()
-        return require("alt-image.sixel._libsixel"),
+        vim.g.alt_img = g_alt_img
+        require("alt-img._core.util")._reset_executable_cache()
+        return require("alt-img.sixel._libsixel"),
             function()
                 vim.fn.executable = saved_executable
-                vim.g.alt_image = saved_g
+                vim.g.alt_img = saved_g
             end
     end
 
@@ -424,7 +424,7 @@ describe("magick.crop_to_sixel", function()
         local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
             return { code = 0, stdout = "CROPPED_SIXEL" }
         end, { img2sixel = false, magick = "magick" })
-        local magick = require("alt-image._core.magick")
+        local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
             local out = magick.crop_to_sixel(png_bytes, 5, 7, 11, 13)
             assert.equals("CROPPED_SIXEL", out)
@@ -450,7 +450,7 @@ describe("magick.crop_to_sixel", function()
         local _, calls, restore = with_mocks({ img2sixel = true, magick = true }, function()
             return { code = 0, stdout = "NEVER" }
         end, { img2sixel = false, magick = false })
-        local magick = require("alt-image._core.magick")
+        local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
             local out = magick.crop_to_sixel(png_bytes, 0, 0, 1, 1)
             assert.is_nil(out)
@@ -466,7 +466,7 @@ describe("magick.crop_to_sixel", function()
         local _, _, restore = with_mocks({ img2sixel = true, magick = false, convert = false }, function()
             return { code = 0, stdout = "NEVER" }
         end, {})
-        local magick = require("alt-image._core.magick")
+        local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
             local out = magick.crop_to_sixel(png_bytes, 0, 0, 1, 1)
             assert.is_nil(out)
@@ -485,7 +485,7 @@ describe("magick.crop_to_png", function()
         local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
             return { code = 0, stdout = "CROPPED_PNG" }
         end, { img2sixel = false, magick = "magick" })
-        local magick = require("alt-image._core.magick")
+        local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
             local out = magick.crop_to_png(png_bytes, 1, 2, 3, 4)
             assert.equals("CROPPED_PNG", out)
@@ -504,7 +504,7 @@ describe("magick.crop_to_png", function()
         local _, _, restore = with_mocks({ img2sixel = true, magick = true }, function()
             return { code = 0, stdout = "NEVER" }
         end, { img2sixel = false, magick = false })
-        local magick = require("alt-image._core.magick")
+        local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
             assert.is_nil(magick.crop_to_png(png_bytes, 0, 0, 1, 1))
         end)
@@ -531,7 +531,7 @@ describe("accel-with-crop integration", function()
     it("sixel provider routes a window-clipped placement through magick", function()
         local saved_system = vim.system
         local saved_executable = vim.fn.executable
-        local saved_g = vim.g.alt_image
+        local saved_g = vim.g.alt_img
 
         vim.fn.executable = function(name)
             if name == "magick" then
@@ -556,21 +556,21 @@ describe("accel-with-crop integration", function()
         end
 
         -- Reload everything under the new env.
-        package.loaded["alt-image"] = nil
-        package.loaded["alt-image._core.util"] = nil
-        package.loaded["alt-image._core.png"] = nil
-        package.loaded["alt-image._core.magick"] = nil
-        package.loaded["alt-image._core.render"] = nil
-        package.loaded["alt-image._core.carrier"] = nil
-        package.loaded["alt-image._core.image"] = nil
-        package.loaded["alt-image.sixel._encode"] = nil
-        package.loaded["alt-image.sixel._libsixel"] = nil
-        package.loaded["alt-image.sixel"] = nil
-        vim.g.alt_image = { magick = "magick", img2sixel = false }
-        require("alt-image._core.util")._reset_executable_cache()
+        package.loaded["alt-img"] = nil
+        package.loaded["alt-img._core.util"] = nil
+        package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.magick"] = nil
+        package.loaded["alt-img._core.render"] = nil
+        package.loaded["alt-img._core.carrier"] = nil
+        package.loaded["alt-img._core.image"] = nil
+        package.loaded["alt-img.sixel._encode"] = nil
+        package.loaded["alt-img.sixel._libsixel"] = nil
+        package.loaded["alt-img.sixel"] = nil
+        vim.g.alt_img = { magick = "magick", img2sixel = false }
+        require("alt-img._core.util")._reset_executable_cache()
 
         H.setup_capture()
-        local img = require("alt-image.sixel")
+        local img = require("alt-img.sixel")
 
         -- Build a setup that triggers cropping: small window, image taller than
         -- the visible region.
@@ -603,7 +603,7 @@ describe("accel-with-crop integration", function()
         -- Restore.
         vim.system = saved_system
         vim.fn.executable = saved_executable
-        vim.g.alt_image = saved_g
+        vim.g.alt_img = saved_g
 
         assert.is_true(saw_magick, "expected magick to be invoked")
         assert.is_true(saw_canned, "expected captured emit to contain canned MAGICK_SIXEL_BYTES")
@@ -611,12 +611,12 @@ describe("accel-with-crop integration", function()
 end)
 
 -- After this spec finishes, restore deterministic defaults for any later
--- specs that share the alt-image config.
+-- specs that share the alt-img config.
 describe("accel cleanup", function()
     it("leaves magick=false, img2sixel=false for subsequent specs", function()
-        vim.g.alt_image = { magick = false, img2sixel = false }
-        assert.equals(false, (vim.g.alt_image or {}).magick)
-        assert.equals(false, (vim.g.alt_image or {}).img2sixel)
+        vim.g.alt_img = { magick = false, img2sixel = false }
+        assert.equals(false, (vim.g.alt_img or {}).magick)
+        assert.equals(false, (vim.g.alt_img or {}).img2sixel)
         -- Tag H so static analyzers don't flag the import as unused.
         _ = H
     end)

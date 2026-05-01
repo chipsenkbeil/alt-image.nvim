@@ -7,7 +7,7 @@ local function read_fixture()
     return b
 end
 
-describe("alt-image.iterm2 set/get/del", function()
+describe("alt-img.iterm2 set/get/del", function()
     local img
     before_each(function()
         H.setup_capture()
@@ -17,9 +17,9 @@ describe("alt-image.iterm2 set/get/del", function()
     it("preserves encoding cache across position-only updates", function()
         local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
         -- Force the resize+encode cache to populate.
-        local render = require("alt-image._core.render")
+        local render = require("alt-img._core.render")
         render.flush()
-        local s = require("alt-image.iterm2")._state[id]
+        local s = require("alt-img.iterm2")._state[id]
         assert.is_true(s ~= nil)
         local before_resized = s.resized_rgba
         assert.is_true(before_resized ~= nil, "resized_rgba should be cached after flush")
@@ -34,13 +34,13 @@ describe("alt-image.iterm2 set/get/del", function()
 
     it("invalidates encoding cache when dims change", function()
         local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
-        require("alt-image._core.render").flush()
-        local s = require("alt-image.iterm2")._state[id]
+        require("alt-img._core.render").flush()
+        local s = require("alt-img.iterm2")._state[id]
         assert.is_true(s ~= nil)
         local before = s.resized_rgba
         assert.is_true(before ~= nil)
         img.set(id, { width = 8, height = 8 })
-        require("alt-image._core.render").flush()
+        require("alt-img._core.render").flush()
         local after = s.resized_rgba
         -- Cache should be different (invalidated, rebuilt).
         assert.is_true(before ~= after)
@@ -49,8 +49,8 @@ describe("alt-image.iterm2 set/get/del", function()
 
     it("caches base64 alongside the full PNG", function()
         local id = img.set(read_fixture(), { row = 1, col = 1, width = 4, height = 4 })
-        require("alt-image._core.render").flush()
-        local s = require("alt-image.iterm2")._state[id]
+        require("alt-img._core.render").flush()
+        local s = require("alt-img.iterm2")._state[id]
         assert.is_true(s ~= nil)
         -- Both the PNG bytes and the base64 form should be cached after the
         -- initial emit, so subsequent emits skip the base64 work.
@@ -62,12 +62,12 @@ describe("alt-image.iterm2 set/get/del", function()
         local before_png = s.full_png
         local before_b64 = s.full_png_b64
         img.set(id, { row = 5, col = 5 })
-        require("alt-image._core.render").flush()
+        require("alt-img._core.render").flush()
         assert.is_true(s.full_png == before_png)
         assert.is_true(s.full_png_b64 == before_b64)
         -- Dim change should invalidate both fields together.
         img.set(id, { width = 8, height = 8 })
-        require("alt-image._core.render").flush()
+        require("alt-img._core.render").flush()
         assert.is_true(s.full_png ~= before_png)
         assert.is_true(s.full_png_b64 ~= before_b64)
         img.del(id)
@@ -141,9 +141,9 @@ describe("alt-image.iterm2 set/get/del", function()
         assert.is_true(seq ~= nil, "expected an OSC 1337 sequence in capture")
         local r = H.parse_iterm2_seq(seq)
         local data = vim.base64.decode(r.payload)
-        local png = require("alt-image._core.png")
+        local png = require("alt-img._core.png")
         local decoded = png.decode(data)
-        local util = require("alt-image._core.util")
+        local util = require("alt-img._core.util")
         local cw, ch = util.cell_pixel_size()
         -- The decoded PNG dimensions should match the cell-pixel area exactly,
         -- not the original 4x4 source size.
@@ -153,7 +153,7 @@ describe("alt-image.iterm2 set/get/del", function()
     end)
 end)
 
-describe("alt-image.iterm2 relative=ui clipping", function()
+describe("alt-img.iterm2 relative=ui clipping", function()
     local img
     before_each(function()
         H.setup_capture()
@@ -203,7 +203,7 @@ describe("alt-image.iterm2 relative=ui clipping", function()
     end)
 end)
 
-describe("alt-image.iterm2 del(math.huge)", function()
+describe("alt-img.iterm2 del(math.huge)", function()
     local img
     before_each(function()
         H.setup_capture()
@@ -220,35 +220,35 @@ describe("alt-image.iterm2 del(math.huge)", function()
     end)
 end)
 
-describe("alt-image.iterm2 _supported", function()
+describe("alt-img.iterm2 _supported", function()
     before_each(function()
-        package.loaded["alt-image.iterm2"] = nil
+        package.loaded["alt-img.iterm2"] = nil
     end)
 
     it("returns true via TERM_PROGRAM=iTerm.app fast path", function()
         H.with_env({ TERM_PROGRAM = "iTerm.app" }, function()
-            local img = require("alt-image.iterm2")
+            local img = require("alt-img.iterm2")
             assert.is_true(img._supported())
         end)
     end)
 
     it("returns true via TERM_PROGRAM=WezTerm", function()
         H.with_env({ TERM_PROGRAM = "WezTerm" }, function()
-            local img = require("alt-image.iterm2")
+            local img = require("alt-img.iterm2")
             assert.is_true(img._supported())
         end)
     end)
 
     it("returns false on unknown TERM_PROGRAM with no probe response", function()
         H.with_env({ TERM_PROGRAM = "XYZ" }, function()
-            local img = require("alt-image.iterm2")
+            local img = require("alt-img.iterm2")
             local ok, _ = img._supported({ timeout = 10 })
             assert.is_false(ok)
         end)
     end)
 end)
 
-describe("alt-image.iterm2 relative=editor", function()
+describe("alt-img.iterm2 relative=editor", function()
     local img
     before_each(function()
         H.setup_capture()
@@ -294,7 +294,7 @@ describe("alt-image.iterm2 relative=editor", function()
     end)
 end)
 
-describe("alt-image.iterm2 relative=buffer", function()
+describe("alt-img.iterm2 relative=buffer", function()
     local img
     before_each(function()
         H.setup_capture()
@@ -308,7 +308,7 @@ describe("alt-image.iterm2 relative=buffer", function()
             "PNGBYTES",
             { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 4, pad = 1 }
         )
-        local ns = vim.api.nvim_create_namespace("alt-image.carrier")
+        local ns = vim.api.nvim_create_namespace("alt-img.carrier")
         local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
         assert.is_true(#marks >= 1)
         local virt = marks[1][4].virt_lines or {}
@@ -324,7 +324,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         -- Truncate buffer so line 4 no longer exists
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "only one line" })
         -- Force a render tick; should not throw E966
-        local render = require("alt-image._core.render")
+        local render = require("alt-img._core.render")
         local ok, err = pcall(function()
             render.flush()
         end)
@@ -338,7 +338,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         local id = img.set("PNGBYTES", { relative = "buffer", buf = buf, row = 2, col = 1, width = 4, height = 4 })
         -- Delete line 2 (the anchor).
         vim.api.nvim_buf_set_lines(buf, 1, 2, false, {})
-        local render = require("alt-image._core.render")
+        local render = require("alt-img._core.render")
         render.flush()
         -- After the delete, get_positions should return an empty list. The
         -- last_positions transitions to empty and need_clear fires. The image
@@ -371,8 +371,8 @@ describe("alt-image.iterm2 relative=buffer", function()
         vim.api.nvim_set_current_buf(buf)
         vim.cmd("resize 3")
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 10 })
-        local carrier = require("alt-image._core.carrier")
-        local iterm2_mod = require("alt-image.iterm2")
+        local carrier = require("alt-img._core.carrier")
+        local iterm2_mod = require("alt-img.iterm2")
         local positions = carrier.get_positions(iterm2_mod, id)
         assert.is_true(#positions >= 1)
         local pos = positions[1]
@@ -393,8 +393,8 @@ describe("alt-image.iterm2 relative=buffer", function()
         vim.api.nvim_set_current_buf(buf)
         vim.cmd("vertical resize 5")
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 1, width = 10, height = 4 })
-        local carrier = require("alt-image._core.carrier")
-        local iterm2_mod = require("alt-image.iterm2")
+        local carrier = require("alt-img._core.carrier")
+        local iterm2_mod = require("alt-img.iterm2")
         local positions = carrier.get_positions(iterm2_mod, id)
         assert.is_true(#positions >= 1)
         local pos = positions[1]
@@ -415,8 +415,8 @@ describe("alt-image.iterm2 relative=buffer", function()
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 3, col = 1, width = 4, height = 8 })
         vim.cmd("normal! G")
         vim.cmd("resize 3")
-        local carrier = require("alt-image._core.carrier")
-        local iterm2_mod = require("alt-image.iterm2")
+        local carrier = require("alt-img._core.carrier")
+        local iterm2_mod = require("alt-img.iterm2")
         local positions = carrier.get_positions(iterm2_mod, id)
         if #positions >= 1 then
             local pos = positions[1]
@@ -434,8 +434,8 @@ describe("alt-image.iterm2 relative=buffer", function()
         vim.api.nvim_set_current_buf(buf)
         vim.cmd("vertical resize 3")
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 2, width = 10, height = 4 })
-        local carrier = require("alt-image._core.carrier")
-        local iterm2_mod = require("alt-image.iterm2")
+        local carrier = require("alt-img._core.carrier")
+        local iterm2_mod = require("alt-img.iterm2")
         local positions = carrier.get_positions(iterm2_mod, id)
         if #positions >= 1 then
             local pos = positions[1]
@@ -455,8 +455,8 @@ describe("alt-image.iterm2 relative=buffer", function()
         vim.cmd("wincmd j")
         vim.cmd("resize 3")
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 10 })
-        local carrier = require("alt-image._core.carrier")
-        local iterm2_mod = require("alt-image.iterm2")
+        local carrier = require("alt-img._core.carrier")
+        local iterm2_mod = require("alt-img.iterm2")
         local positions = carrier.get_positions(iterm2_mod, id)
         assert.equals(2, #positions)
         local heights = { positions[1].src.h, positions[2].src.h }
@@ -479,7 +479,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         local id = img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 10 })
         vim.cmd("5")
         vim.cmd("normal! zt") -- line 5 at top; anchor at line 1 is off-screen
-        local positions = require("alt-image._core.carrier").get_positions(require("alt-image.iterm2"), id)
+        local positions = require("alt-img._core.carrier").get_positions(require("alt-img.iterm2"), id)
         assert.equals(0, #positions)
         img.del(id)
         vim.cmd("only")
@@ -499,7 +499,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         -- All 10 virt_lines remain visible at the top of the window.
         local CE = vim.api.nvim_replace_termcodes("<C-e>", true, false, true)
         vim.cmd("normal! " .. CE)
-        local positions = require("alt-image._core.carrier").get_positions(require("alt-image.iterm2"), id)
+        local positions = require("alt-img._core.carrier").get_positions(require("alt-img.iterm2"), id)
         assert.is_true(#positions >= 1)
         -- src.y=0, src.h=10: full image visible, anchored at win_top.
         assert.equals(0, positions[1].src.y)
@@ -525,7 +525,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         for _ = 1, 5 do
             vim.cmd("normal! " .. CE)
         end
-        local positions = require("alt-image._core.carrier").get_positions(require("alt-image.iterm2"), id)
+        local positions = require("alt-img._core.carrier").get_positions(require("alt-img.iterm2"), id)
         assert.is_true(#positions >= 1)
         assert.equals(4, positions[1].src.y)
         assert.equals(6, positions[1].src.h)
@@ -551,7 +551,7 @@ describe("alt-image.iterm2 relative=buffer", function()
         assert.equals("4", r.args.width)
         assert.equals("2", r.args.height)
         -- The payload must decode as a valid PNG (round-trips through _png.decode).
-        local pdec = require("alt-image._core.png")
+        local pdec = require("alt-img._core.png")
         local raw = vim.base64.decode(r.payload)
         local decoded = pdec.decode(raw)
         assert.is_true(decoded.width >= 1)

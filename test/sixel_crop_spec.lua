@@ -1,6 +1,6 @@
 -- test/sixel_crop_spec.lua
 -- Tests for the pure crop_rgba helper in _core/image.lua.
-local image = require("alt-image._core.image")
+local image = require("alt-img._core.image")
 
 describe("_core.image.crop_rgba", function()
     -- Build a 4x4 RGBA where pixel (x,y) = (x*16, y*16, 0, 255).

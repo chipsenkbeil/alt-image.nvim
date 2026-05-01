@@ -1,4 +1,4 @@
--- lua/alt-image/sixel/_encode.lua
+-- lua/alt-img/sixel/_encode.lua
 -- Pure-Lua sixel encoder (median-cut quantizer + DCS emitter) plus a small
 -- dispatcher that routes through external tools (`img2sixel`, `magick`) when
 -- they're available. Lives in `sixel/` because none of this is reusable by
@@ -369,7 +369,7 @@ M.encode_sixel = _encode_sixel
 -- the decode -> crop -> re-encode round-trip.
 --
 -- Each call resolves the binary at call-time via the wrapper's `binary()`
--- helpers, so toggling `vim.g.alt_image.{magick,img2sixel}` takes effect
+-- helpers, so toggling `vim.g.alt_img.{magick,img2sixel}` takes effect
 -- without re-requiring this module.
 
 ---Encode an RGBA buffer to a sixel DCS string, using external tools when
@@ -379,15 +379,15 @@ M.encode_sixel = _encode_sixel
 ---@param h_px integer
 ---@return string sixel DCS
 function M.encode_sixel_dispatch(rgba, w_px, h_px)
-    local magick = require("alt-image._core.magick")
-    local libsixel = require("alt-image.sixel._libsixel")
+    local magick = require("alt-img._core.magick")
+    local libsixel = require("alt-img.sixel._libsixel")
     local has_libsixel = libsixel.binary() ~= nil
     local has_magick = magick.binary() ~= nil
 
     -- Both external tools want PNG on stdin; encode once and try each in turn.
     local png_bytes
     if has_libsixel or has_magick then
-        local png = require("alt-image._core.png")
+        local png = require("alt-img._core.png")
         png_bytes = png.encode(rgba, w_px, h_px)
     end
     if has_libsixel and png_bytes then

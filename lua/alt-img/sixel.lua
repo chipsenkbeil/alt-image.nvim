@@ -1,4 +1,4 @@
--- lua/alt-image/sixel.lua
+-- lua/alt-img/sixel.lua
 -- Sixel image protocol provider, drop-in for vim.ui.img.
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_sixel.lua
@@ -7,13 +7,13 @@
 -- the requested cell dims, runs the encoder, caches the result per-placement,
 -- and emits the DCS sequence.
 
-local util = require("alt-image._core.util")
-local png = require("alt-image._core.png")
-local image = require("alt-image._core.image")
-local magick = require("alt-image._core.magick")
-local senc = require("alt-image.sixel._encode")
-local render = require("alt-image._core.render")
-local lru = require("alt-image._core.lru")
+local util = require("alt-img._core.util")
+local png = require("alt-img._core.png")
+local image = require("alt-img._core.image")
+local magick = require("alt-img._core.magick")
+local senc = require("alt-img.sixel._encode")
+local render = require("alt-img._core.render")
+local lru = require("alt-img._core.lru")
 
 local M = {}
 
@@ -43,7 +43,7 @@ local function canonicalize(opts)
     -- relative defaults: if opts.buf is set, default to 'buffer'; else 'ui'.
     local rel = opts.relative or (opts.buf ~= nil and "buffer" or "ui")
     if rel ~= "ui" and rel ~= "editor" and rel ~= "buffer" then
-        error("alt-image: invalid relative " .. tostring(rel) .. " (expected 'ui', 'editor', or 'buffer')", 3)
+        error("alt-img: invalid relative " .. tostring(rel) .. " (expected 'ui', 'editor', or 'buffer')", 3)
     end
     -- buf == 0 means current buffer.
     local buf = opts.buf
@@ -215,7 +215,7 @@ local function get_pos_for(id)
             )
             return p and { p } or {}
         end
-        return require("alt-image._core.carrier").get_positions(M, id) or {}
+        return require("alt-img._core.carrier").get_positions(M, id) or {}
     end
 end
 
@@ -229,7 +229,7 @@ function M.set(data_or_id, opts)
         -- Update path
         local s = state[data_or_id]
         if not s then
-            error("alt-image.sixel: unknown id " .. tostring(data_or_id), 2)
+            error("alt-img.sixel: unknown id " .. tostring(data_or_id), 2)
         end
         -- v1: don't support relative-changing updates. Preserve original relative
         -- on partial-merge so canonicalize's default of 'ui' doesn't clobber it.
@@ -241,7 +241,7 @@ function M.set(data_or_id, opts)
         if opts and opts.relative and opts.relative ~= s.opts.relative then
             error(
                 string.format(
-                    "alt-image.sixel: cannot change relative on update (was %s, got %s); del and re-create instead",
+                    "alt-img.sixel: cannot change relative on update (was %s, got %s); del and re-create instead",
                     s.opts.relative,
                     opts.relative
                 ),
@@ -266,7 +266,7 @@ function M.set(data_or_id, opts)
         -- For carrier-managed placements, reposition the carrier so the resolved
         -- screen pos reflects the new opts (otherwise the float stays put).
         if s.opts.relative ~= "ui" then
-            require("alt-image._core.carrier").update(M, data_or_id, s.opts)
+            require("alt-img._core.carrier").update(M, data_or_id, s.opts)
         end
         -- Mark dirty; the position-diff in tick() drives clearing automatically.
         render.invalidate(M, data_or_id)
@@ -282,7 +282,7 @@ function M.set(data_or_id, opts)
     state[id] = { data = data_or_id, opts = opts_canonical, id = id, sixel_cache_by_src = {} }
 
     if state[id].opts.relative ~= "ui" then
-        require("alt-image._core.carrier").register(M, id, state[id].opts)
+        require("alt-img._core.carrier").register(M, id, state[id].opts)
     end
 
     render.register(M, id, get_pos_for(id))
@@ -303,7 +303,7 @@ function M.del(id)
     if id == math.huge then
         local any = next(state) ~= nil
         for k, _ in pairs(state) do
-            require("alt-image._core.carrier").unregister(M, k)
+            require("alt-img._core.carrier").unregister(M, k)
             render.unregister(M, k)
         end
         state = {}
@@ -315,7 +315,7 @@ function M.del(id)
     if not state[id] then
         return false
     end
-    require("alt-image._core.carrier").unregister(M, id)
+    require("alt-img._core.carrier").unregister(M, id)
     render.unregister(M, id)
     state[id] = nil
     render.flush()

@@ -22,7 +22,7 @@
 --         last_positions.
 --   - All emission happens synchronously within the SYNC block.
 
-local util = require("alt-image._core.util")
+local util = require("alt-img._core.util")
 
 local M = {}
 
@@ -206,7 +206,7 @@ if timer then
     )
 end
 
-local AUGROUP = vim.api.nvim_create_augroup("alt-image.render", { clear = true })
+local AUGROUP = vim.api.nvim_create_augroup("alt-img.render", { clear = true })
 
 local function mark_all_dirty()
     for _, p in pairs(placements) do

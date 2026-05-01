@@ -4,7 +4,7 @@ vim.opt.runtimepath:prepend(vim.uv.cwd())
 vim.opt.mouse = "a"
 vim.opt.mousemoveevent = true
 
-local altimg = require("alt-image")
+local altimg = require("alt-img")
 vim.ui.img = altimg
 
 local function read_fixture()
@@ -14,7 +14,7 @@ local function read_fixture()
     return b
 end
 
-vim.api.nvim_create_user_command("AltImageDemo", function(o)
+vim.api.nvim_create_user_command("AltImgDemo", function(o)
     local mode = o.args ~= "" and o.args or "ui"
     local data = read_fixture()
     local opts = { row = 5, col = 10, width = 4, height = 4 }
@@ -29,10 +29,10 @@ vim.api.nvim_create_user_command("AltImageDemo", function(o)
         opts.pad = 1
     end
     local id = vim.ui.img.set(data, opts)
-    print(string.format("AltImageDemo: placed %s id=%d (run :AltImageDel %d to remove)", mode, id, id))
+    print(string.format("AltImgDemo: placed %s id=%d (run :AltImgDel %d to remove)", mode, id, id))
 end, { nargs = "?" })
 
-vim.api.nvim_create_user_command("AltImageDel", function(o)
+vim.api.nvim_create_user_command("AltImgDel", function(o)
     local arg = o.args
     if arg == "inf" or arg == "all" then
         vim.ui.img.del(math.huge)
@@ -40,7 +40,7 @@ vim.api.nvim_create_user_command("AltImageDel", function(o)
     end
     local id = tonumber(arg)
     if not id then
-        print("Usage: AltImageDel <id> | AltImageDel inf")
+        print("Usage: AltImgDel <id> | AltImgDel inf")
         return
     end
     vim.ui.img.del(id)
@@ -100,23 +100,23 @@ local function mouse_on(mode)
         width = 4,
         height = 4,
     })
-    vim.keymap.set("", "<MouseMove>", update_from_mouse, { silent = true, desc = "alt-image mouse-follow" })
+    vim.keymap.set("", "<MouseMove>", update_from_mouse, { silent = true, desc = "alt-img mouse-follow" })
     mouse_state.mapping = true
     print(
-        "AltImageMouse: following mouse with relative="
+        "AltImgMouse: following mouse with relative="
             .. mode
-            .. ". Run :AltImageMouse off to stop, or :AltImageMouse <ui|editor> to switch."
+            .. ". Run :AltImgMouse off to stop, or :AltImgMouse <ui|editor> to switch."
     )
 end
 
-vim.api.nvim_create_user_command("AltImageMouse", function(o)
+vim.api.nvim_create_user_command("AltImgMouse", function(o)
     local arg = o.args ~= "" and o.args or "ui"
     if arg == "off" then
         mouse_off()
         return
     end
     if arg ~= "ui" and arg ~= "editor" then
-        print("Usage: AltImageMouse {ui|editor|off}")
+        print("Usage: AltImgMouse {ui|editor|off}")
         return
     end
     mouse_on(arg)
@@ -130,21 +130,21 @@ end, {
 -- Helper to identify the active vim.ui.img provider
 local function provider_name()
     local img = vim.ui.img
-    if img == require("alt-image.iterm2") then
-        return "alt-image.iterm2"
+    if img == require("alt-img.iterm2") then
+        return "alt-img.iterm2"
     end
-    if img == require("alt-image.sixel") then
-        return "alt-image.sixel"
+    if img == require("alt-img.sixel") then
+        return "alt-img.sixel"
     end
-    if img == require("alt-image") then
-        return "alt-image (autodetect)"
+    if img == require("alt-img") then
+        return "alt-img (autodetect)"
     end
     return "<unknown>"
 end
 
-vim.api.nvim_create_user_command("AltImageInfo", function()
+vim.api.nvim_create_user_command("AltImgInfo", function()
     local lines = {
-        "alt-image.nvim diagnostics",
+        "alt-img.nvim diagnostics",
         "==========================",
         "Terminal env:",
         string.format("  TERM           = %s", tostring(vim.env.TERM)),
@@ -166,20 +166,20 @@ vim.api.nvim_create_user_command("AltImageInfo", function()
         "",
         "Per-provider _supported():",
     }
-    local i_ok, i_msg = require("alt-image.iterm2")._supported()
-    local s_ok, s_msg = require("alt-image.sixel")._supported()
+    local i_ok, i_msg = require("alt-img.iterm2")._supported()
+    local s_ok, s_msg = require("alt-img.sixel")._supported()
     table.insert(lines, string.format("  iterm2._supported() = %s, %s", tostring(i_ok), i_msg or "no message"))
     table.insert(lines, string.format("  sixel._supported()  = %s, %s", tostring(s_ok), s_msg or "no message"))
 
     -- External tools + PNG compression status
-    local g = vim.g.alt_image or {}
-    local magick = require("alt-image._core.magick").binary()
-    local libsixel = require("alt-image.sixel._libsixel").binary()
-    local png_encode = require("alt-image._core.png")
+    local g = vim.g.alt_img or {}
+    local magick = require("alt-img._core.magick").binary()
+    local libsixel = require("alt-img.sixel._libsixel").binary()
+    local png_encode = require("alt-img._core.png")
     table.insert(lines, "")
     table.insert(lines, "External tools:")
-    table.insert(lines, string.format("  vim.g.alt_image.magick    = %s", vim.inspect(g.magick)))
-    table.insert(lines, string.format("  vim.g.alt_image.img2sixel = %s", vim.inspect(g.img2sixel)))
+    table.insert(lines, string.format("  vim.g.alt_img.magick    = %s", vim.inspect(g.magick)))
+    table.insert(lines, string.format("  vim.g.alt_img.img2sixel = %s", vim.inspect(g.img2sixel)))
     table.insert(lines, string.format("  resolved magick           = %s", magick or "not used"))
     table.insert(lines, string.format("  resolved img2sixel        = %s", libsixel or "not used"))
     table.insert(
@@ -195,10 +195,10 @@ vim.api.nvim_create_user_command("AltImageInfo", function()
     end
 end, {})
 
-vim.api.nvim_create_user_command("AltImageProvider", function(o)
+vim.api.nvim_create_user_command("AltImgProvider", function(o)
     local arg = o.args ~= "" and o.args or "auto"
     if arg ~= "iterm2" and arg ~= "sixel" and arg ~= "auto" then
-        print("Usage: AltImageProvider {iterm2|sixel|auto}")
+        print("Usage: AltImgProvider {iterm2|sixel|auto}")
         return
     end
 
@@ -209,19 +209,19 @@ vim.api.nvim_create_user_command("AltImageProvider", function(o)
 
     -- If mouse-follow is active, kill it (its mouse_state.id was tied to the old provider).
     pcall(function()
-        vim.cmd("AltImageMouse off")
+        vim.cmd("AltImgMouse off")
     end)
 
     if arg == "iterm2" then
-        vim.ui.img = require("alt-image.iterm2")
+        vim.ui.img = require("alt-img.iterm2")
     elseif arg == "sixel" then
-        vim.ui.img = require("alt-image.sixel")
+        vim.ui.img = require("alt-img.sixel")
     else
-        -- auto: reset autodetect cache + reload alt-image so detect() runs fresh
-        package.loaded["alt-image"] = nil
-        vim.ui.img = require("alt-image")
+        -- auto: reset autodetect cache + reload alt-img so detect() runs fresh
+        package.loaded["alt-img"] = nil
+        vim.ui.img = require("alt-img")
     end
-    print("AltImageProvider: now using " .. provider_name())
+    print("AltImgProvider: now using " .. provider_name())
 end, {
     nargs = "?",
     complete = function()
@@ -229,13 +229,13 @@ end, {
     end,
 })
 
-print("alt-image.nvim smoke test ready.")
+print("alt-img.nvim smoke test ready.")
 print("Try:")
-print("  :AltImageDemo ui|editor|buffer")
-print("  :AltImageDel <id>     (or `inf` to clear all)")
-print("  :AltImageMouse ui     (image follows mouse, absolute terminal coords)")
-print("  :AltImageMouse editor (image follows mouse, relative to editor)")
-print("  :AltImageMouse off    (stop following)")
-print("  :AltImageInfo                    (diagnostics: terminal + provider state)")
-print("  :AltImageProvider iterm2|sixel|auto  (switch vim.ui.img provider)")
-print("  :checkhealth alt-image alt-image.iterm2 alt-image.sixel")
+print("  :AltImgDemo ui|editor|buffer")
+print("  :AltImgDel <id>     (or `inf` to clear all)")
+print("  :AltImgMouse ui     (image follows mouse, absolute terminal coords)")
+print("  :AltImgMouse editor (image follows mouse, relative to editor)")
+print("  :AltImgMouse off    (stop following)")
+print("  :AltImgInfo                    (diagnostics: terminal + provider state)")
+print("  :AltImgProvider iterm2|sixel|auto  (switch vim.ui.img provider)")
+print("  :checkhealth alt-img alt-img.iterm2 alt-img.sixel")

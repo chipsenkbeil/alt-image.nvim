@@ -1,7 +1,7 @@
--- alt-image internal utilities
+-- alt-img internal utilities
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_util.lua
----@class vim.ui.img._util
+---@class altimg._util
 ---@field private _cell_width_px integer
 ---@field private _cell_height_px integer
 ---@field private _cell_size_queried boolean

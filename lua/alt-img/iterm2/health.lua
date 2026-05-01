@@ -1,11 +1,11 @@
--- :checkhealth alt-image.iterm2
+-- :checkhealth alt-img.iterm2
 local M = {}
 
 function M.check()
     local h = vim.health
-    h.start("alt-image.iterm2")
+    h.start("alt-img.iterm2")
 
-    local ok, msg = require("alt-image.iterm2")._supported()
+    local ok, msg = require("alt-img.iterm2")._supported()
     if ok then
         h.ok("iTerm2 OSC 1337 protocol: supported" .. (msg and (" (" .. msg .. ")") or ""))
     else
@@ -19,7 +19,7 @@ function M.check()
     if vim.env.TMUX then
         h.warn(
             "tmux detected: tmux passthrough is NOT supported in this version "
-                .. "of alt-image.nvim. Images may not render. Tracked in README."
+                .. "of alt-img.nvim. Images may not render. Tracked in README."
         )
     end
 end

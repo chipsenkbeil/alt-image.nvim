@@ -1,11 +1,11 @@
--- :checkhealth alt-image.sixel
+-- :checkhealth alt-img.sixel
 local M = {}
 
 function M.check()
     local h = vim.health
-    h.start("alt-image.sixel")
+    h.start("alt-img.sixel")
 
-    local ok, msg = require("alt-image.sixel")._supported()
+    local ok, msg = require("alt-img.sixel")._supported()
     if ok then
         h.ok("Sixel protocol: supported" .. (msg and (" (" .. msg .. ")") or ""))
     else
@@ -17,7 +17,7 @@ function M.check()
                         .. "(Windows Terminal, iTerm.app, WezTerm, foot, mlterm, "
                         .. "contour, xterm with +sixel build), "
                         .. "or set TERM=xterm-sixel, or set "
-                        .. 'or set vim.ui.img = require("alt-image.sixel") to force.'
+                        .. 'or set vim.ui.img = require("alt-img.sixel") to force.'
                 )
         )
     end
@@ -29,7 +29,7 @@ function M.check()
     if vim.env.TMUX then
         h.warn(
             "tmux detected: tmux passthrough is NOT supported in this version "
-                .. "of alt-image.nvim. Images may not render. Tracked in README."
+                .. "of alt-img.nvim. Images may not render. Tracked in README."
         )
     end
 end
