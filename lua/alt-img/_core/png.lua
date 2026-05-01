@@ -26,8 +26,19 @@ local _zlib_uncompress ---@type fun(data:string, expected:integer):string?
 do
     local ok, ffi = pcall(require, "ffi")
     if ok then
-        local zok, zlib = pcall(ffi.load, "z")
-        if zok then
+        -- Match the encoder's lookup names below — "z" picks up libz on
+        -- Linux/macOS, "zlib1"/"zlib"/"libz" cover Windows (zlib1.dll) and
+        -- odd packagings. Without this, decode falls all the way back to
+        -- the pure-Lua inflater, which dominates first-render latency.
+        local zlib
+        for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
+            local zok, lib = pcall(ffi.load, name)
+            if zok then
+                zlib = lib
+                break
+            end
+        end
+        if zlib then
             pcall(
                 ffi.cdef,
                 [[
