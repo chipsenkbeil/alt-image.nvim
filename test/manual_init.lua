@@ -127,17 +127,31 @@ end, {
     end,
 })
 
--- Helper to identify the active vim.ui.img provider
+-- Helper to identify the active vim.ui.img provider. When the autodetect
+-- dispatcher is in use, also resolve which underlying protocol it picked
+-- (only after the cache is warm — runs detection if not).
 local function provider_name()
     local img = vim.ui.img
-    if img == require("alt-img.iterm2") then
+    local iterm2 = require("alt-img.iterm2")
+    local sixel = require("alt-img.sixel")
+    if img == iterm2 then
         return "alt-img.iterm2"
     end
-    if img == require("alt-img.sixel") then
+    if img == sixel then
         return "alt-img.sixel"
     end
     if img == require("alt-img") then
-        return "alt-img (autodetect)"
+        local ok, p = pcall(img._provider)
+        if not ok or not p then
+            return "alt-img (autodetect, not yet resolved)"
+        end
+        if p == iterm2 then
+            return "alt-img (autodetect → alt-img.iterm2)"
+        end
+        if p == sixel then
+            return "alt-img (autodetect → alt-img.sixel)"
+        end
+        return "alt-img (autodetect → <unknown>)"
     end
     return "<unknown>"
 end
