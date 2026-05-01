@@ -9,8 +9,8 @@ local PROTOCOLS = { 'iterm2', 'sixel' }
 
 local function active_provider_line(h)
   -- Report what alt-image's autodetect picks. Users who installed a specific
-  -- provider directly (via require('alt-image.iterm2'/.sixel)) bypassed
-  -- autodetect entirely; the per-protocol drilldowns below still apply.
+  -- provider directly bypassed autodetect entirely; the per-protocol
+  -- drilldowns below still apply.
   local ok, p = pcall(require('alt-image')._provider)
   if ok then
     local name
