@@ -129,7 +129,7 @@ end
 
 -- Build a sixel DCS for a sub-rectangle of the resized image. `src` is in
 -- cell units; the carrier math operates in resized-target pixel space, so
--- the magick fast path uses `-resize WxH! -crop CWxCH+X+Y` to do everything
+-- the magick fast path uses `-sample WxH! -crop CWxCH+X+Y` to do everything
 -- in one subprocess and skip the pure-Lua decode/resize/crop chain.
 local function build_sixel_cropped(s, src)
     util.query_cell_size()

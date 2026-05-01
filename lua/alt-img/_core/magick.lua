@@ -104,8 +104,10 @@ function M.encode_sixel_from_rgba(rgba, w_px, h_px, colors)
 end
 
 ---Decode + nearest-neighbor resize + sixel-encode in one magick subprocess.
----Lets the providers skip the pure-Lua decode (slow without libz) and the
----pure-Lua resize for the common case where input is already PNG.
+---Uses `-sample` (raw pixel sampling, no filtering) so output matches the
+---pure-Lua `image.resize` path — sharp pixels, no smoothing. magick's
+---default `-resize` uses Lanczos which produces blurry output for the 1:1
+---cell-pixel mapping the providers expect.
 ---@param png_bytes string original PNG bytes
 ---@param w_px integer target width in pixels
 ---@param h_px integer target height in pixels
@@ -118,13 +120,14 @@ function M.encode_sixel_from_png_resized(png_bytes, w_px, h_px, colors)
     end
     local geom = string.format("%dx%d!", w_px, h_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-resize", geom, "-define", def, "sixel:-" }, png_bytes)
+    return run({ bin, "-", "-sample", geom, "-define", def, "sixel:-" }, png_bytes)
 end
 
 ---Decode + resize-to-target + crop-of-target + sixel-encode in one magick
 ---subprocess. The crop coordinates are in *target* pixel space (after the
 ---resize), matching the providers' carrier math which works in cell-pixel
----units of the resized image.
+---units of the resized image. Resize uses `-sample` (nearest-neighbor) for
+---the same reason as `encode_sixel_from_png_resized`.
 ---@param png_bytes string original PNG bytes
 ---@param full_w_px integer resized full-image width in pixels
 ---@param full_h_px integer resized full-image height in pixels
@@ -139,10 +142,10 @@ function M.crop_resized_to_sixel(png_bytes, full_w_px, full_h_px, x_px, y_px, w_
     if not bin then
         return nil
     end
-    local resize = string.format("%dx%d!", full_w_px, full_h_px)
+    local sample = string.format("%dx%d!", full_w_px, full_h_px)
     local crop = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-resize", resize, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
+    return run({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
 end
 
 return M

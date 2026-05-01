@@ -590,7 +590,7 @@ end)
 describe("magick.encode_sixel_from_png_resized", function()
     local png_bytes = "FAKEPNG"
 
-    it("invokes magick with -resize WxH! when configured", function()
+    it("invokes magick with -sample WxH! (nearest-neighbor) when configured", function()
         local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
             return { code = 0, stdout = "RESIZED_SIXEL" }
         end, { img2sixel = false, magick = "magick" })
@@ -603,11 +603,15 @@ describe("magick.encode_sixel_from_png_resized", function()
             assert.equals("magick", cmd[1])
             local found = false
             for i = 1, #cmd - 1 do
-                if cmd[i] == "-resize" and cmd[i + 1] == "80x24!" then
+                if cmd[i] == "-sample" and cmd[i + 1] == "80x24!" then
                     found = true
                 end
             end
-            assert.is_true(found, "expected -resize 80x24! in arg list")
+            assert.is_true(found, "expected -sample 80x24! in arg list")
+            -- -resize would default to Lanczos, smoothing 1:1 pixel maps.
+            for _, a in ipairs(cmd) do
+                assert.is_true(a ~= "-resize", "must not use -resize (smoothing filter)")
+            end
             assert.equals("sixel:-", cmd[#cmd])
             assert.equals(png_bytes, calls[1].opts.stdin)
         end)
@@ -635,29 +639,32 @@ end)
 describe("magick.crop_resized_to_sixel", function()
     local png_bytes = "FAKEPNG"
 
-    it("emits both -resize and -crop with target-space coords", function()
+    it("emits both -sample (nearest-neighbor) and -crop with target-space coords", function()
         local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
             return { code = 0, stdout = "RESIZED_CROPPED_SIXEL" }
         end, { img2sixel = false, magick = "magick" })
         local magick = require("alt-img._core.magick")
         local ok, err = pcall(function()
-            -- Resize the source PNG to 80x24, then crop a 11x13 rect at +5+7.
+            -- Sample the source PNG to 80x24, then crop a 11x13 rect at +5+7.
             local out = magick.crop_resized_to_sixel(png_bytes, 80, 24, 5, 7, 11, 13)
             assert.equals("RESIZED_CROPPED_SIXEL", out)
             assert.equals(1, #calls)
             local cmd = calls[1].cmd
             assert.equals("magick", cmd[1])
-            local saw_resize, saw_crop = false, false
+            local saw_sample, saw_crop = false, false
             for i = 1, #cmd - 1 do
-                if cmd[i] == "-resize" and cmd[i + 1] == "80x24!" then
-                    saw_resize = true
+                if cmd[i] == "-sample" and cmd[i + 1] == "80x24!" then
+                    saw_sample = true
                 end
                 if cmd[i] == "-crop" and cmd[i + 1] == "11x13+5+7" then
                     saw_crop = true
                 end
             end
-            assert.is_true(saw_resize, "expected -resize 80x24! in arg list")
+            assert.is_true(saw_sample, "expected -sample 80x24! in arg list")
             assert.is_true(saw_crop, "expected -crop 11x13+5+7 in arg list")
+            for _, a in ipairs(cmd) do
+                assert.is_true(a ~= "-resize", "must not use -resize (smoothing filter)")
+            end
         end)
         restore()
         if not ok then
@@ -719,7 +726,7 @@ end)
 
 -- Integration: a buffer-anchored placement gets cropped because its window is
 -- too short. The sixel provider's fast path sees magick is on PATH and feeds
--- the original PNG through `magick - -resize WxH! -crop CWxCH+X+Y sixel:-` in
+-- the original PNG through `magick - -sample WxH! -crop CWxCH+X+Y sixel:-` in
 -- a single subprocess. We assert the captured emit contains the canned bytes
 -- returned by our mock.
 describe("accel-with-crop integration", function()
