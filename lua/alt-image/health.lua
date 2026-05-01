@@ -8,19 +8,18 @@ local M = {}
 local PROTOCOLS = { 'iterm2', 'sixel' }
 
 local function active_provider_line(h)
-  -- Report what `require('alt-image')` would pick. Users who installed a
-  -- specific provider via `require('alt-image.iterm2'/.sixel)` bypassed this
-  -- module entirely; the per-protocol drilldowns below still apply to them.
+  -- Report what alt-image's autodetect picks. Users who installed a specific
+  -- provider directly (via require('alt-image.iterm2'/.sixel)) bypassed
+  -- autodetect entirely; the per-protocol drilldowns below still apply.
   local ok, p = pcall(require('alt-image')._provider)
   if ok then
     local name
     for _, n in ipairs(PROTOCOLS) do
       if p == require('alt-image.' .. n) then name = n; break end
     end
-    h.ok(string.format('require("alt-image") would pick: %s', name or '?'))
+    h.ok(string.format('Active provider: %s (autodetected)', name or '?'))
   else
-    h.error(string.format('require("alt-image"): no protocol detected (%s)',
-      tostring(p)))
+    h.error(string.format('Active provider: none detected (%s)', tostring(p)))
   end
 end
 
