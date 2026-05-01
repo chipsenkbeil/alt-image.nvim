@@ -72,12 +72,12 @@ function H.fresh_provider(name)
   package.loaded['alt-image']           = nil
   package.loaded['alt-image.iterm2']    = nil
   package.loaded['alt-image.sixel']     = nil
-  package.loaded['alt-image._render']   = nil
-  package.loaded['alt-image._carrier']  = nil
-  package.loaded['alt-image._magick']   = nil
-  package.loaded['alt-image._libsixel'] = nil
+  package.loaded['alt-image._core.render']   = nil
+  package.loaded['alt-image._core.carrier']  = nil
+  package.loaded['alt-image._core.magick']   = nil
+  package.loaded['alt-image.sixel._libsixel'] = nil
   vim.g.alt_image = { magick = false, img2sixel = false }   -- pure-Lua paths
-  pcall(function() require('alt-image._util')._reset_executable_cache() end)
+  pcall(function() require('alt-image._core.util')._reset_executable_cache() end)
   return require('alt-image.' .. name)
 end
 

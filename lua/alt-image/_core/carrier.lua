@@ -1,4 +1,4 @@
--- lua/alt-image/_carrier.lua
+-- lua/alt-image/_core/carrier.lua
 -- Reserves screen real estate via floating windows / extmarks for placements
 -- with relative != 'ui'. Owns the float/extmark lifecycle and exposes the
 -- current screen positions via M.get_positions. The render coordinator
@@ -17,7 +17,7 @@
 -- the carrier tightens src to the visible sub-rect and providers crop +
 -- re-encode before emitting.
 
-local util = require('alt-image._util')
+local util = require('alt-image._core.util')
 
 local M = {}
 

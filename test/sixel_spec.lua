@@ -17,7 +17,7 @@ describe('alt-image.sixel set/get/del', function()
   it('preserves encoding cache across position-only updates', function()
     local id = img.set(png_bytes, { row = 1, col = 1, width = 4, height = 4 })
     -- Force the resize+encode cache to populate.
-    local render = require('alt-image._render')
+    local render = require('alt-image._core.render')
     render.flush()
     local s = require('alt-image.sixel')._state[id]
     assert.is_true(s ~= nil)
@@ -34,13 +34,13 @@ describe('alt-image.sixel set/get/del', function()
 
   it('invalidates encoding cache when dims change', function()
     local id = img.set(png_bytes, { row = 1, col = 1, width = 4, height = 4 })
-    require('alt-image._render').flush()
+    require('alt-image._core.render').flush()
     local s = require('alt-image.sixel')._state[id]
     assert.is_true(s ~= nil)
     local before = s.resized_rgba
     assert.is_true(before ~= nil)
     img.set(id, { width = 8, height = 8 })
-    require('alt-image._render').flush()
+    require('alt-image._core.render').flush()
     local after = s.resized_rgba
     -- Cache should be different (invalidated, rebuilt).
     assert.is_true(before ~= after)
@@ -108,7 +108,7 @@ describe('alt-image.sixel relative=ui clipping', function()
     -- Sixel raster width should reflect the clipped cell width (1 col visible)
     -- multiplied by cell pixel width. With default cell width 8, full would be
     -- 32 px (4 cells); clipped to 1 col yields 8 px.
-    local util = require('alt-image._util')
+    local util = require('alt-image._core.util')
     local cw = ({ util.cell_pixel_size() })[1]
     assert.equals(1 * cw, r.raster.w)
     img.del(id)
@@ -151,8 +151,8 @@ describe('alt-image.sixel _supported', function()
   it('returns true via TERM_PROGRAM=iTerm.app', function()
     H.with_env({ TERM_PROGRAM = 'iTerm.app', TERM = 'xterm-256color' }, function()
       package.loaded['alt-image.sixel'] = nil
-      package.loaded['alt-image._render'] = nil
-      package.loaded['alt-image._carrier'] = nil
+      package.loaded['alt-image._core.render'] = nil
+      package.loaded['alt-image._core.carrier'] = nil
       assert.is_true(require('alt-image.sixel')._supported())
     end)
   end)
@@ -160,8 +160,8 @@ describe('alt-image.sixel _supported', function()
   it('returns true via TERM_PROGRAM=WezTerm', function()
     H.with_env({ TERM_PROGRAM = 'WezTerm', TERM = 'xterm-256color' }, function()
       package.loaded['alt-image.sixel'] = nil
-      package.loaded['alt-image._render'] = nil
-      package.loaded['alt-image._carrier'] = nil
+      package.loaded['alt-image._core.render'] = nil
+      package.loaded['alt-image._core.carrier'] = nil
       assert.is_true(require('alt-image.sixel')._supported())
     end)
   end)
@@ -246,7 +246,7 @@ describe('alt-image.sixel relative=buffer', function()
     -- Truncate buffer so line 4 no longer exists
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'only one line' })
     -- Force a render tick; should not throw E966
-    local render = require('alt-image._render')
+    local render = require('alt-image._core.render')
     local ok, err = pcall(function() render.flush() end)
     assert.is_true(ok, 'render.flush after buffer shrink errored: ' .. tostring(err))
     img.del(id)
@@ -259,7 +259,7 @@ describe('alt-image.sixel relative=buffer', function()
                                     row = 2, col = 1, width = 4, height = 4 })
     -- Delete line 2 (the anchor).
     vim.api.nvim_buf_set_lines(buf, 1, 2, false, {})
-    local render = require('alt-image._render')
+    local render = require('alt-image._core.render')
     render.flush()
     -- After the delete, get_positions should return an empty list. The
     -- last_positions transitions to empty and need_clear fires. The image
@@ -318,7 +318,7 @@ describe('alt-image.sixel relative=buffer', function()
     vim.cmd('resize 3')
     local id = img.set(read_fixture(), { relative='buffer', buf=buf,
                                          row=1, col=1, width=4, height=10 })
-    local carrier = require('alt-image._carrier')
+    local carrier = require('alt-image._core.carrier')
     local sixel_mod = require('alt-image.sixel')
     local positions = carrier.get_positions(sixel_mod, id)
     assert.is_true(#positions >= 1)
@@ -344,7 +344,7 @@ describe('alt-image.sixel relative=buffer', function()
     vim.cmd('vertical resize 5')
     local id = img.set(read_fixture(), { relative='buffer', buf=buf,
                                          row=1, col=1, width=10, height=4 })
-    local carrier = require('alt-image._carrier')
+    local carrier = require('alt-image._core.carrier')
     local sixel_mod = require('alt-image.sixel')
     local positions = carrier.get_positions(sixel_mod, id)
     assert.is_true(#positions >= 1)
@@ -373,7 +373,7 @@ describe('alt-image.sixel relative=buffer', function()
     -- Scroll down to position the anchor at the top, clipping the image above.
     vim.cmd('normal! G')  -- go to end of buffer
     vim.cmd('resize 3')   -- small window
-    local carrier = require('alt-image._carrier')
+    local carrier = require('alt-image._core.carrier')
     local sixel_mod = require('alt-image.sixel')
     local positions = carrier.get_positions(sixel_mod, id)
     -- With row=3 and the window only showing lines 3-5, the image should be
@@ -396,7 +396,7 @@ describe('alt-image.sixel relative=buffer', function()
     vim.cmd('vertical resize 3')
     local id = img.set(read_fixture(), { relative='buffer', buf=buf,
                                          row=1, col=2, width=10, height=4 })
-    local carrier = require('alt-image._carrier')
+    local carrier = require('alt-image._core.carrier')
     local sixel_mod = require('alt-image.sixel')
     local positions = carrier.get_positions(sixel_mod, id)
     -- With col=2 in a very narrow window, the image may be clipped; we expect
@@ -420,7 +420,7 @@ describe('alt-image.sixel relative=buffer', function()
     vim.cmd('resize 3')
     local id = img.set(read_fixture(), { relative='buffer', buf=buf,
                                          row=1, col=1, width=4, height=10 })
-    local carrier = require('alt-image._carrier')
+    local carrier = require('alt-image._core.carrier')
     local sixel_mod = require('alt-image.sixel')
     local positions = carrier.get_positions(sixel_mod, id)
     assert.equals(2, #positions)
@@ -442,7 +442,7 @@ describe('alt-image.sixel relative=buffer', function()
                                        row=1, col=1, width=4, height=10 })
     vim.cmd('5')
     vim.cmd('normal! zt')   -- line 5 at top; anchor at line 1 is off-screen
-    local positions = require('alt-image._carrier').get_positions(
+    local positions = require('alt-image._core.carrier').get_positions(
       require('alt-image.sixel'), id)
     assert.equals(0, #positions)
     img.del(id); vim.cmd('only')
@@ -460,7 +460,7 @@ describe('alt-image.sixel relative=buffer', function()
     -- All 10 virt_lines remain visible at the top of the window.
     local CE = vim.api.nvim_replace_termcodes('<C-e>', true, false, true)
     vim.cmd('normal! ' .. CE)
-    local positions = require('alt-image._carrier').get_positions(
+    local positions = require('alt-image._core.carrier').get_positions(
       require('alt-image.sixel'), id)
     assert.is_true(#positions >= 1)
     -- src.y=0, src.h=10: full image visible, anchored at win_top.
@@ -482,7 +482,7 @@ describe('alt-image.sixel relative=buffer', function()
     -- Each subsequent Ctrl-E removes 1 visible virt_line from the top.
     -- 5 total Ctrl-E → topfill=6, 4 rows of image cropped from the top.
     for _ = 1, 5 do vim.cmd('normal! ' .. CE) end
-    local positions = require('alt-image._carrier').get_positions(
+    local positions = require('alt-image._core.carrier').get_positions(
       require('alt-image.sixel'), id)
     assert.is_true(#positions >= 1)
     assert.equals(4, positions[1].src.y)

@@ -7,11 +7,13 @@
 -- the requested cell dims, runs the encoder, caches the result per-placement,
 -- and emits the DCS sequence.
 
-local util    = require('alt-image._util')
-local png     = require('alt-image._png')
-local senc    = require('alt-image._sixel_encode')
-local render  = require('alt-image._render')
-local lru     = require('alt-image._lru')
+local util   = require('alt-image._core.util')
+local png    = require('alt-image._core.png')
+local image  = require('alt-image._core.image')
+local magick = require('alt-image._core.magick')
+local senc   = require('alt-image.sixel._encode')
+local render = require('alt-image._core.render')
+local lru    = require('alt-image._core.lru')
 
 local M = {}
 
@@ -76,7 +78,7 @@ local function ensure_resized(s)
   if s.opts.width or s.opts.height then
     local target_w = (s.opts.width  or math.ceil(w / cw)) * cw
     local target_h = (s.opts.height or math.ceil(h / ch)) * ch
-    rgba, w, h = senc.resize(rgba, w, h, target_w, target_h)
+    rgba, w, h = image.resize(rgba, w, h, target_w, target_h)
   end
   s.resized_rgba, s.resized_w, s.resized_h = rgba, w, h
   return rgba, w, h
@@ -112,12 +114,12 @@ local function build_sixel_cropped(s, src)
                                 and not s.opts.width
                                 and not s.opts.height
   if can_use_png_fast_path then
-    local accel = senc.crop_and_encode_sixel(s.data, x_px, y_px, w_px, h_px)
+    local accel = magick.crop_to_sixel(s.data, x_px, y_px, w_px, h_px)
     if accel and #accel > 0 then return accel end
   end
 
   local rgba, w, h = ensure_resized(s)
-  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
+  local cropped, cw_px, ch_px = image.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
   return senc.encode_sixel_dispatch(cropped, cw_px, ch_px)
 end
 
@@ -184,7 +186,7 @@ local function get_pos_for(id)
       )
       return p and { p } or {}
     end
-    return require('alt-image._carrier').get_positions(M, id) or {}
+    return require('alt-image._core.carrier').get_positions(M, id) or {}
   end
 end
 
@@ -226,7 +228,7 @@ function M.set(data_or_id, opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
     if s.opts.relative ~= 'ui' then
-      require('alt-image._carrier').update(M, data_or_id, s.opts)
+      require('alt-image._core.carrier').update(M, data_or_id, s.opts)
     end
     -- Mark dirty; the position-diff in tick() drives clearing automatically.
     render.invalidate(M, data_or_id)
@@ -243,7 +245,7 @@ function M.set(data_or_id, opts)
                 sixel_cache_by_src = {} }
 
   if state[id].opts.relative ~= 'ui' then
-    require('alt-image._carrier').register(M, id, state[id].opts)
+    require('alt-image._core.carrier').register(M, id, state[id].opts)
   end
 
   render.register(M, id, get_pos_for(id))
@@ -262,7 +264,7 @@ function M.del(id)
   if id == math.huge then
     local any = next(state) ~= nil
     for k, _ in pairs(state) do
-      require('alt-image._carrier').unregister(M, k)
+      require('alt-image._core.carrier').unregister(M, k)
       render.unregister(M, k)
     end
     state = {}
@@ -270,7 +272,7 @@ function M.del(id)
     return any
   end
   if not state[id] then return false end
-  require('alt-image._carrier').unregister(M, id)
+  require('alt-image._core.carrier').unregister(M, id)
   render.unregister(M, id)
   state[id] = nil
   render.flush()

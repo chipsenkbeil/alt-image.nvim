@@ -1,10 +1,10 @@
 -- test/png_encode_spec.lua
--- Round-trip tests for the pure-Lua PNG encoder. Encoded output is fed to
--- _png.decode (the existing decoder) to verify it produces a valid PNG.
-local png_encode = require('alt-image._png_encode')
-local png        = require('alt-image._png')
+-- Round-trip tests for the merged PNG codec — encode is fed to decode to
+-- verify it produces a valid PNG.
+local png        = require('alt-image._core.png')
+local png_encode = png   -- legacy alias: encoder + has_libz live on the same module now
 
-describe('_png_encode.encode', function()
+describe('_core.png.encode', function()
   it('round-trips a 2x2 RGBA image', function()
     local rgba = string.char(
       255, 0,   0,   255,   0,   255, 0,   255,

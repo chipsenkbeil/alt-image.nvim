@@ -1,4 +1,4 @@
--- lua/alt-image/_render.lua
+-- lua/alt-image/_core/render.lua
 -- Timer-driven, position-diff-based rendering coordinator.
 --
 -- Why this exists:
@@ -23,7 +23,7 @@
 --         last_positions.
 --   - All emission happens synchronously within the SYNC block.
 
-local util = require('alt-image._util')
+local util = require('alt-image._core.util')
 
 local M = {}
 

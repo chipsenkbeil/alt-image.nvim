@@ -3,12 +3,12 @@
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_iterm2.lua
 
-local util       = require('alt-image._util')
-local render     = require('alt-image._render')
-local png        = require('alt-image._png')
-local senc       = require('alt-image._sixel_encode')   -- for crop_rgba helper
-local png_encode = require('alt-image._png_encode')
-local lru        = require('alt-image._lru')
+local util   = require('alt-image._core.util')
+local render = require('alt-image._core.render')
+local png    = require('alt-image._core.png')
+local image  = require('alt-image._core.image')
+local magick = require('alt-image._core.magick')
+local lru    = require('alt-image._core.lru')
 
 local M = {}
 
@@ -86,7 +86,7 @@ local function ensure_resized(s)
   if s.opts.width or s.opts.height then
     local target_w = (s.opts.width  or math.ceil(img.width  / cw)) * cw
     local target_h = (s.opts.height or math.ceil(img.height / ch)) * ch
-    rgba, w, h = senc.resize(rgba, img.width, img.height, target_w, target_h)
+    rgba, w, h = image.resize(rgba, img.width, img.height, target_w, target_h)
   end
   s.resized_rgba, s.resized_w, s.resized_h = rgba, w, h
   return rgba, w, h
@@ -103,7 +103,7 @@ end
 local function ensure_full_png(s)
   if s.full_png and s.full_png_b64 then return s.full_png, s.full_png_b64 end
   local rgba, w, h = ensure_resized(s)
-  s.full_png = png_encode.encode(rgba, w, h)
+  s.full_png = png.encode(rgba, w, h)
   s.full_png_b64 = vim.base64.encode(s.full_png)
   return s.full_png, s.full_png_b64
 end
@@ -125,13 +125,13 @@ local function build_png_cropped(s, src)
   -- We feed the *resized* PNG (not the original) so the accelerated path
   -- crops the same image data the pure-Lua fallback would.
   local resized_png = ensure_full_png(s)
-  local accel = senc.crop_and_encode_png(resized_png, x_px, y_px, w_px, h_px)
+  local accel = magick.crop_to_png(resized_png, x_px, y_px, w_px, h_px)
   if accel and #accel > 0 then
     return accel, vim.base64.encode(accel), w_px, h_px
   end
   local rgba, full_w, full_h = ensure_resized(s)
-  local cropped, cw_px, ch_px = senc.crop_rgba(rgba, full_w, full_h, x_px, y_px, w_px, h_px)
-  local png_bytes = png_encode.encode(cropped, cw_px, ch_px)
+  local cropped, cw_px, ch_px = image.crop_rgba(rgba, full_w, full_h, x_px, y_px, w_px, h_px)
+  local png_bytes = png.encode(cropped, cw_px, ch_px)
   return png_bytes, vim.base64.encode(png_bytes), cw_px, ch_px
 end
 
@@ -228,7 +228,7 @@ local function get_pos_for(id)
       )
       return p and { p } or {}
     end
-    return require('alt-image._carrier').get_positions(M, id) or {}
+    return require('alt-image._core.carrier').get_positions(M, id) or {}
   end
 end
 
@@ -272,7 +272,7 @@ function M.set(data_or_id, opts)
     -- For carrier-managed placements, reposition the carrier so the resolved
     -- screen pos reflects the new opts (otherwise the float stays put).
     if s.opts.relative ~= 'ui' then
-      require('alt-image._carrier').update(M, data_or_id, s.opts)
+      require('alt-image._core.carrier').update(M, data_or_id, s.opts)
     end
     -- Mark dirty; the position-diff in tick() drives clearing automatically.
     render.invalidate(M, data_or_id)
@@ -289,7 +289,7 @@ function M.set(data_or_id, opts)
                 png_cache_by_src = {}, png_cache_by_src_order = {} }
 
   if state[id].opts.relative ~= 'ui' then
-    require('alt-image._carrier').register(M, id, state[id].opts)
+    require('alt-image._core.carrier').register(M, id, state[id].opts)
   end
 
   render.register(M, id, get_pos_for(id))
@@ -308,7 +308,7 @@ function M.del(id)
   if id == math.huge then
     local any = next(state) ~= nil
     for k, _ in pairs(state) do
-      require('alt-image._carrier').unregister(M, k)
+      require('alt-image._core.carrier').unregister(M, k)
       render.unregister(M, k)
     end
     state = {}
@@ -316,7 +316,7 @@ function M.del(id)
     return any
   end
   if not state[id] then return false end
-  require('alt-image._carrier').unregister(M, id)
+  require('alt-image._core.carrier').unregister(M, id)
   render.unregister(M, id)
   state[id] = nil
   render.flush()

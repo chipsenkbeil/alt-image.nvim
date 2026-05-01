@@ -1,5 +1,5 @@
 local H = require('test.helpers')
-local senc = require('alt-image._sixel_encode')
+local senc = require('alt-image.sixel._encode')
 
 describe('harness', function()
   it('runs a passing test', function()
@@ -12,7 +12,7 @@ describe('harness', function()
 end)
 
 describe('_png', function()
-  local png = require('alt-image._png')
+  local png = require('alt-image._core.png')
 
   it('decodes the 4x4 fixture', function()
     local f = assert(io.open('test/fixtures/4x4.png', 'rb'))
@@ -42,7 +42,7 @@ describe('helpers', function()
 end)
 
 describe('_util.png_dimensions', function()
-  local util = require('alt-image._util')
+  local util = require('alt-image._core.util')
 
   it('parses width and height from a real PNG', function()
     local f = assert(io.open('test/fixtures/4x4.png', 'rb'))
@@ -68,7 +68,7 @@ describe('_util.png_dimensions', function()
 end)
 
 describe('_util.clip_to_bounds', function()
-  local util = require('alt-image._util')
+  local util = require('alt-image._core.util')
 
   it('image fully inside bounds → src covers full image', function()
     local p = util.clip_to_bounds(5, 5, 4, 4, 1, 1, 24, 80)

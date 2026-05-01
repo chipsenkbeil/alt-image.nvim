@@ -1,4 +1,10 @@
--- alt-image sixel encoder (pure transforms).
+-- lua/alt-image/sixel/_encode.lua
+-- Pure-Lua sixel encoder (median-cut quantizer + DCS emitter) plus a small
+-- dispatcher that routes through external tools (`img2sixel`, `magick`) when
+-- they're available. Lives in `sixel/` because none of this is reusable by
+-- the iterm2 protocol — sixel-specific output format, sixel-specific cost
+-- profile.
+--
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_sixel.lua
 -- Splits the encoder out from the provider so tests can exercise it directly
@@ -186,40 +192,6 @@ local function _pack_pixels(rgba, w, h)
   return pixel_colors, n_pixels
 end
 
----Nearest-neighbor resize of RGBA pixel data using FFI.
----@param rgba string RGBA pixel data (4 bytes per pixel)
----@param src_w integer source width
----@param src_h integer source height
----@param dst_w integer destination width
----@param dst_h integer destination height
----@return string rgba, integer width, integer height
-local function _resize(rgba, src_w, src_h, dst_w, dst_h)
-  local src = ffi.cast('const uint8_t*', rgba)
-  local dst_size = dst_w * dst_h * 4
-  local dst = ffi.new('uint8_t[?]', dst_size)
-
-  -- Pre-compute source X offsets (byte offset into source row)
-  local src_x_offsets = ffi.new('int32_t[?]', dst_w)
-  for x = 0, dst_w - 1 do
-    src_x_offsets[x] = math.floor(x * src_w / dst_w) * 4
-  end
-
-  local dst_idx = 0
-  for y = 0, dst_h - 1 do
-    local src_row = src + math.floor(y * src_h / dst_h) * src_w * 4
-    for x = 0, dst_w - 1 do
-      local sp = src_row + src_x_offsets[x]
-      dst[dst_idx] = sp[0]
-      dst[dst_idx + 1] = sp[1]
-      dst[dst_idx + 2] = sp[2]
-      dst[dst_idx + 3] = sp[3]
-      dst_idx = dst_idx + 4
-    end
-  end
-
-  return ffi.string(dst, dst_size), dst_w, dst_h
-end
-
 ---Quantize RGBA pixel data to a palette of at most 256 colors using median cut.
 ---@param rgba string RGBA pixel data
 ---@param w integer width in pixels
@@ -370,36 +342,6 @@ local function _encode_sixel(rgba, w, h)
   return out:get()
 end
 
----Slice an RGBA pixel buffer to a sub-rectangle.
----@param rgba string raw RGBA bytes (4 bytes/pixel, row-major)
----@param full_w_px integer original width in pixels
----@param full_h_px integer original height in pixels
----@param x_px integer left offset (pixels) of the crop
----@param y_px integer top offset (pixels) of the crop
----@param w_px integer crop width (pixels)
----@param h_px integer crop height (pixels)
----@return string cropped_rgba, integer w_px, integer h_px
-function M.crop_rgba(rgba, full_w_px, full_h_px, x_px, y_px, w_px, h_px)
-  -- Clamp to source bounds defensively.
-  if x_px < 0 then w_px = w_px + x_px; x_px = 0 end
-  if y_px < 0 then h_px = h_px + y_px; y_px = 0 end
-  if x_px + w_px > full_w_px then w_px = full_w_px - x_px end
-  if y_px + h_px > full_h_px then h_px = full_h_px - y_px end
-  if w_px <= 0 or h_px <= 0 then return '', 0, 0 end
-
-  -- Use FFI for fast row copy.
-  local stride = full_w_px * 4
-  local out = ffi.new('uint8_t[?]', w_px * h_px * 4)
-  local src = ffi.cast('const uint8_t*', rgba)
-  for row = 0, h_px - 1 do
-    ffi.copy(out + row * w_px * 4,
-             src + (y_px + row) * stride + x_px * 4,
-             w_px * 4)
-  end
-  return ffi.string(out, w_px * h_px * 4), w_px, h_px
-end
-
-M.resize       = _resize
 M.quantize     = _quantize
 M.encode_sixel = _encode_sixel
 
@@ -425,16 +367,16 @@ M.encode_sixel = _encode_sixel
 ---@param h_px integer
 ---@return string sixel DCS
 function M.encode_sixel_dispatch(rgba, w_px, h_px)
-  local magick   = require('alt-image._magick')
-  local libsixel = require('alt-image._libsixel')
+  local magick   = require('alt-image._core.magick')
+  local libsixel = require('alt-image.sixel._libsixel')
   local has_libsixel = libsixel.binary() ~= nil
   local has_magick   = magick.binary() ~= nil
 
   -- Both external tools want PNG on stdin; encode once and try each in turn.
   local png_bytes
   if has_libsixel or has_magick then
-    local png_encode = require('alt-image._png_encode')
-    png_bytes = png_encode.encode(rgba, w_px, h_px)
+    local png = require('alt-image._core.png')
+    png_bytes = png.encode(rgba, w_px, h_px)
   end
   if has_libsixel and png_bytes then
     local out = libsixel.encode_sixel(png_bytes)
@@ -445,33 +387,6 @@ function M.encode_sixel_dispatch(rgba, w_px, h_px)
     if out and #out > 0 then return out end
   end
   return _encode_sixel(rgba, w_px, h_px)
-end
-
----Combined crop + sixel-encode using ImageMagick in a single call.
----Returns nil if magick is disabled / missing, or the subprocess fails —
----caller must fall back to its existing decode -> crop -> encode path.
----@param png_bytes string original PNG bytes
----@param x_px integer crop x offset (px)
----@param y_px integer crop y offset (px)
----@param w_px integer crop width (px)
----@param h_px integer crop height (px)
----@return string? sixel
-function M.crop_and_encode_sixel(png_bytes, x_px, y_px, w_px, h_px)
-  return require('alt-image._magick').crop_to_sixel(
-    png_bytes, x_px, y_px, w_px, h_px)
-end
-
----Combined crop + PNG re-encode using ImageMagick. Returns nil on failure so
----the caller can fall back to pure-Lua crop + `_png_encode.encode`.
----@param png_bytes string original PNG bytes
----@param x_px integer
----@param y_px integer
----@param w_px integer
----@param h_px integer
----@return string? png
-function M.crop_and_encode_png(png_bytes, x_px, y_px, w_px, h_px)
-  return require('alt-image._magick').crop_to_png(
-    png_bytes, x_px, y_px, w_px, h_px)
 end
 
 return M

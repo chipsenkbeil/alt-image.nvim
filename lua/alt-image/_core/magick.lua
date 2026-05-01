@@ -11,7 +11,7 @@
 
 local M = {}
 
-local _util = require('alt-image._util')
+local _util = require('alt-image._core.util')
 
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---Auto-detect order: `magick` (IM7) then `convert` (IM6 + IM7 alias).

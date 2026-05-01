@@ -155,9 +155,9 @@ vim.api.nvim_create_user_command('AltImageInfo', function()
 
   -- External tools + PNG compression status
   local g          = vim.g.alt_image or {}
-  local magick     = require('alt-image._magick').binary()
-  local libsixel   = require('alt-image._libsixel').binary()
-  local png_encode = require('alt-image._png_encode')
+  local magick     = require('alt-image._core.magick').binary()
+  local libsixel   = require('alt-image.sixel._libsixel').binary()
+  local png_encode = require('alt-image._core.png')
   table.insert(lines, '')
   table.insert(lines, 'External tools:')
   table.insert(lines, string.format('  vim.g.alt_image.magick    = %s',

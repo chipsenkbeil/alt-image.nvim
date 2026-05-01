@@ -1,13 +1,29 @@
----Pure-Lua PNG decoder for neovim's image API.
----Decodes PNG files to RGBA pixel data without external dependencies.
----Only supports bit depth 8, non-interlaced PNGs.
----@class vim.ui.img._png
+-- lua/alt-image/_core/png.lua
+-- Pure-Lua PNG codec used by both providers.
+--   * Decoder: handles 8-bit non-interlaced PNGs (color types 0/2/3/4/6).
+--     Uses libz `uncompress` via FFI when available; falls back to a pure-Lua
+--     DEFLATE inflater (fixed + dynamic Huffman, stored blocks).
+--   * Encoder: emits 8-bit RGBA PNG. Uses libz `compress2` via FFI when
+--     available for real DEFLATE; otherwise falls back to a stored-block
+--     zlib stream (still a valid PNG, just larger wire size).
+--
+-- API:
+--   decode(bytes) -> { width, height, pixels = rgba_string }
+--   encode(rgba, width, height) -> png_bytes
+--   has_libz() -> boolean (true when the encoder uses real DEFLATE)
+
 local M = {}
 
 local bit = require('bit')
 local band, bor, lshift, rshift = bit.band, bit.bor, bit.lshift, bit.rshift
 
-local _zlib_uncompress ---@type fun(data:string, expected:integer):string?
+local PNG_SIGNATURE = '\137PNG\r\n\26\n'
+
+-- =============================================================================
+-- Decoder
+-- =============================================================================
+
+local _zlib_uncompress  ---@type fun(data:string, expected:integer):string?
 do
   local ok, ffi = pcall(require, 'ffi')
   if ok then
@@ -29,9 +45,6 @@ do
     end
   end
 end
-
----PNG magic number
-local PNG_SIGNATURE = '\137PNG\r\n\26\n'
 
 -- DEFLATE fixed Huffman code lengths (RFC 1951 section 3.2.6)
 -- Lit/len 0-143: 8 bits, 144-255: 9 bits, 256-279: 7 bits, 280-287: 8 bits
@@ -84,22 +97,13 @@ local DIST_EXTRA = {
 -- Code length alphabet order (for dynamic Huffman)
 local CL_ORDER = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 }
 
----@class vim.ui.img._png.BitReader
----@field data string
----@field pos integer byte position (1-based)
----@field bitpos integer bit offset within current byte (0-7)
 local BitReader = {}
 BitReader.__index = BitReader
 
----@param data string
----@return vim.ui.img._png.BitReader
 function BitReader.new(data)
   return setmetatable({ data = data, pos = 1, bitpos = 0 }, BitReader)
 end
 
----Read n bits from the stream (LSB first per DEFLATE spec).
----@param n integer
----@return integer
 function BitReader:read(n)
   local val = 0
   local shift = 0
@@ -123,7 +127,6 @@ function BitReader:read(n)
   return val
 end
 
----Align to byte boundary.
 function BitReader:align()
   if self.bitpos > 0 then
     self.bitpos = 0
@@ -131,10 +134,6 @@ function BitReader:align()
   end
 end
 
----Build a Huffman decode table from code lengths.
----@param lengths table<integer, integer> symbol -> code length
----@param max_sym integer maximum symbol value
----@return table decode_table
 local function build_huffman(lengths, max_sym)
   local max_bits = 0
   for sym = 0, max_sym do
@@ -146,7 +145,6 @@ local function build_huffman(lengths, max_sym)
     return {}
   end
 
-  -- Count code lengths
   local bl_count = {}
   for i = 0, max_bits do
     bl_count[i] = 0
@@ -157,7 +155,6 @@ local function build_huffman(lengths, max_sym)
     end
   end
 
-  -- Compute starting codes
   local next_code = {}
   local code = 0
   for nbits = 1, max_bits do
@@ -165,21 +162,17 @@ local function build_huffman(lengths, max_sym)
     next_code[nbits] = code
   end
 
-  -- Assign codes to symbols and build reverse lookup
-  -- Table maps (code, length) -> symbol using a flat array indexed by bit-reversed code
   local tbl = { max_bits = max_bits }
   for sym = 0, max_sym do
     local len = lengths[sym]
     if len and len > 0 then
       local c = next_code[len]
       next_code[len] = c + 1
-      -- Bit-reverse the code for LSB-first decoding
       local rev = 0
       for _ = 1, len do
         rev = bor(lshift(rev, 1), band(c, 1))
         c = rshift(c, 1)
       end
-      -- Store in table: for each possible extension to max_bits
       local step = lshift(1, len)
       while rev < lshift(1, max_bits) do
         tbl[rev] = { sym = sym, len = len }
@@ -191,10 +184,6 @@ local function build_huffman(lengths, max_sym)
   return tbl
 end
 
----Decode one symbol using a Huffman table.
----@param reader vim.ui.img._png.BitReader
----@param tbl table
----@return integer symbol
 local function huffman_decode(reader, tbl)
   local max_bits = tbl.max_bits
   local code = reader:read(max_bits)
@@ -202,7 +191,6 @@ local function huffman_decode(reader, tbl)
   if not entry then
     error('PNG: invalid Huffman code in DEFLATE stream')
   end
-  -- Put back the extra bits we read
   local extra = max_bits - entry.len
   if extra > 0 then
     reader.bitpos = reader.bitpos - extra
@@ -214,9 +202,6 @@ local function huffman_decode(reader, tbl)
   return entry.sym
 end
 
----Inflate (decompress) a raw DEFLATE stream.
----@param data string raw DEFLATE data (no zlib header/checksum)
----@return string decompressed data
 local function inflate(data)
   local reader = BitReader.new(data)
   local out = {}
@@ -230,7 +215,6 @@ local function inflate(data)
     local btype = reader:read(2)
 
     if btype == 0 then
-      -- Uncompressed block
       reader:align()
       if reader.pos + 3 > #data then
         error('PNG: truncated uncompressed block')
@@ -242,7 +226,6 @@ local function inflate(data)
       reader.pos = reader.pos + len
 
     elseif btype == 1 or btype == 2 then
-      -- Compressed block (fixed or dynamic Huffman)
       local lit_tbl, dist_tbl
 
       if btype == 1 then
@@ -253,12 +236,10 @@ local function inflate(data)
         lit_tbl = fixed_lit_tbl
         dist_tbl = fixed_dist_tbl
       else
-        -- Dynamic Huffman: read code trees
         local hlit = reader:read(5) + 257
         local hdist = reader:read(5) + 1
         local hclen = reader:read(4) + 4
 
-        -- Read code length code lengths
         local cl_lengths = {}
         for i = 0, 18 do
           cl_lengths[i] = 0
@@ -268,7 +249,6 @@ local function inflate(data)
         end
         local cl_tbl = build_huffman(cl_lengths, 18)
 
-        -- Decode literal/length and distance code lengths
         local all_lengths = {}
         local total = hlit + hdist
         local idx = 0
@@ -312,19 +292,15 @@ local function inflate(data)
         dist_tbl = build_huffman(dist_lengths, hdist - 1)
       end
 
-      -- Decode symbols
       while true do
         local sym = huffman_decode(reader, lit_tbl)
 
         if sym < 256 then
-          -- Literal byte
           table.insert(out, string.char(sym))
           out_len = out_len + 1
         elseif sym == 256 then
-          -- End of block
           break
         else
-          -- Length/distance pair
           local length = LEN_BASE[sym]
           local extra = LEN_EXTRA[sym]
           if extra > 0 then
@@ -338,8 +314,6 @@ local function inflate(data)
             dist = dist + reader:read(extra)
           end
 
-          -- Copy from back-reference
-          -- We need to handle the case where length > dist (overlapping copy)
           local flat = table.concat(out)
           out = { flat }
           out_len = #flat
@@ -363,11 +337,6 @@ local function inflate(data)
   return table.concat(out)
 end
 
----Paeth predictor function (PNG filter type 4).
----@param a integer
----@param b integer
----@param c integer
----@return integer
 local function paeth(a, b, c)
   local p = a + b - c
   local pa = math.abs(p - a)
@@ -386,10 +355,8 @@ end
 ---@param data string raw PNG file bytes
 ---@return {width:integer, height:integer, pixels:string}
 function M.decode(data)
-  -- Validate PNG signature
   assert(data:sub(1, 8) == PNG_SIGNATURE, 'PNG: invalid signature')
 
-  -- Parse chunks
   local pos = 9
   local ihdr, plte, trns
   local idat_chunks = {}
@@ -404,7 +371,7 @@ function M.decode(data)
       + string.byte(data, pos + 3)
     local chunk_type = data:sub(pos + 4, pos + 7)
     local chunk_data = data:sub(pos + 8, pos + 7 + length)
-    pos = pos + 12 + length -- length(4) + type(4) + data + crc(4)
+    pos = pos + 12 + length
 
     if chunk_type == 'IHDR' then
       ihdr = chunk_data
@@ -422,7 +389,6 @@ function M.decode(data)
   assert(ihdr, 'PNG: missing IHDR chunk')
   assert(#idat_chunks > 0, 'PNG: missing IDAT chunk')
 
-  -- Parse IHDR
   local width = lshift(string.byte(ihdr, 1), 24)
     + lshift(string.byte(ihdr, 2), 16)
     + lshift(string.byte(ihdr, 3), 8)
@@ -438,12 +404,10 @@ function M.decode(data)
   assert(bit_depth == 8, 'PNG: only bit depth 8 is supported, got ' .. bit_depth)
   assert(interlace == 0, 'PNG: interlaced PNGs are not supported')
 
-  -- Bytes per pixel based on color type
   local bpp_map = { [0] = 1, [2] = 3, [3] = 1, [4] = 2, [6] = 4 }
   local bpp = bpp_map[color_type]
   assert(bpp, 'PNG: unsupported color type: ' .. color_type)
 
-  -- Decompress IDAT data
   local compressed = table.concat(idat_chunks)
   local expected_size = height * (1 + width * bpp)
   local decompressed
@@ -451,15 +415,13 @@ function M.decode(data)
     decompressed = _zlib_uncompress(compressed, expected_size)
   end
   if not decompressed then
-    -- Fallback: skip 2-byte zlib header (CMF + FLG) and 4-byte Adler-32 checksum
     local raw_deflate = compressed:sub(3, -5)
     decompressed = inflate(raw_deflate)
   end
 
-  -- Unfilter scanlines
   local stride = width * bpp
-  local pixels = {} -- flat array of bytes
-  local prev_row = {} -- previous row bytes (for Up, Average, Paeth filters)
+  local pixels = {}
+  local prev_row = {}
   for i = 1, stride do
     prev_row[i] = 0
   end
@@ -475,59 +437,48 @@ function M.decode(data)
       dpos = dpos + 1
     end
 
-    -- Apply filter
     if filter == 1 then
-      -- Sub
       for i = bpp + 1, stride do
         row[i] = band(row[i] + row[i - bpp], 0xFF)
       end
     elseif filter == 2 then
-      -- Up
       for i = 1, stride do
         row[i] = band(row[i] + prev_row[i], 0xFF)
       end
     elseif filter == 3 then
-      -- Average
       for i = 1, stride do
         local left = i > bpp and row[i - bpp] or 0
         row[i] = band(row[i] + math.floor((left + prev_row[i]) / 2), 0xFF)
       end
     elseif filter == 4 then
-      -- Paeth
       for i = 1, stride do
         local left = i > bpp and row[i - bpp] or 0
         local up_left = i > bpp and prev_row[i - bpp] or 0
         row[i] = band(row[i] + paeth(left, prev_row[i], up_left), 0xFF)
       end
     end
-    -- filter == 0: None (no modification needed)
 
-    -- Store row pixels
     for i = 1, stride do
       table.insert(pixels, row[i])
     end
     prev_row = row
   end
 
-  -- Normalize to RGBA
   local rgba = {}
   local px_idx = 1
   if color_type == 0 then
-    -- Grayscale -> RGBA
     for _ = 1, width * height do
       local g = pixels[px_idx]
       px_idx = px_idx + 1
       table.insert(rgba, string.char(g, g, g, 255))
     end
   elseif color_type == 2 then
-    -- RGB -> RGBA
     for _ = 1, width * height do
       local r, g, b = pixels[px_idx], pixels[px_idx + 1], pixels[px_idx + 2]
       px_idx = px_idx + 3
       table.insert(rgba, string.char(r, g, b, 255))
     end
   elseif color_type == 3 then
-    -- Indexed -> RGBA (lookup PLTE, alpha from tRNS)
     assert(plte, 'PNG: color type 3 requires PLTE chunk')
     for _ = 1, width * height do
       local idx = pixels[px_idx]
@@ -543,14 +494,12 @@ function M.decode(data)
       table.insert(rgba, string.char(r, g, b, a))
     end
   elseif color_type == 4 then
-    -- Grayscale+Alpha -> RGBA
     for _ = 1, width * height do
       local g, a = pixels[px_idx], pixels[px_idx + 1]
       px_idx = px_idx + 2
       table.insert(rgba, string.char(g, g, g, a))
     end
   elseif color_type == 6 then
-    -- RGBA -> pass through
     for _ = 1, width * height do
       local r, g, b, a = pixels[px_idx], pixels[px_idx + 1], pixels[px_idx + 2], pixels[px_idx + 3]
       px_idx = px_idx + 4
@@ -564,5 +513,152 @@ function M.decode(data)
     pixels = table.concat(rgba),
   }
 end
+
+-- =============================================================================
+-- Encoder
+-- =============================================================================
+
+-- Precomputed CRC32 table (poly 0xEDB88320, the reflected/zlib variant).
+local crc32_table = {}
+for i = 0, 255 do
+  local c = i
+  for _ = 1, 8 do
+    c = (c % 2 == 1) and bit.bxor(0xEDB88320, bit.rshift(c, 1)) or bit.rshift(c, 1)
+  end
+  crc32_table[i] = c
+end
+
+local function crc32(s)
+  local c = 0xFFFFFFFF
+  for i = 1, #s do
+    local b = string.byte(s, i)
+    c = bit.bxor(crc32_table[bit.band(bit.bxor(c, b), 0xFF)], bit.rshift(c, 8))
+  end
+  return bit.bxor(c, 0xFFFFFFFF)
+end
+
+local function adler32(s)
+  local a, b = 1, 0
+  for i = 1, #s do
+    a = (a + string.byte(s, i)) % 65521
+    b = (b + a) % 65521
+  end
+  return b * 65536 + a
+end
+
+local function be32(n)
+  local b1 = math.floor(n / 0x1000000) % 0x100
+  local b2 = math.floor(n / 0x10000) % 0x100
+  local b3 = math.floor(n / 0x100) % 0x100
+  local b4 = n % 0x100
+  return string.char(b1, b2, b3, b4)
+end
+
+local function le16(n)
+  return string.char(n % 0x100, math.floor(n / 0x100) % 0x100)
+end
+
+local function build_chunk(typ, data)
+  local crc = crc32(typ .. data)
+  return be32(#data) .. typ .. data .. be32(crc)
+end
+
+---Wrap raw bytes as a zlib stored-block stream (used as the libz fallback).
+local function zlib_store(raw)
+  local parts = { '\120\1' }  -- zlib header: 0x78, 0x01
+  local n = #raw
+  if n == 0 then
+    parts[#parts + 1] = '\1' .. le16(0) .. le16(0xFFFF)
+  else
+    local pos = 1
+    while pos <= n do
+      local remaining = n - pos + 1
+      local block_len = remaining > 65535 and 65535 or remaining
+      local is_final = (pos + block_len - 1 == n)
+      parts[#parts + 1] = string.char(is_final and 1 or 0)
+      parts[#parts + 1] = le16(block_len)
+      parts[#parts + 1] = le16(bit.band(bit.bxor(block_len, 0xFFFF), 0xFFFF))
+      parts[#parts + 1] = raw:sub(pos, pos + block_len - 1)
+      pos = pos + block_len
+    end
+  end
+  parts[#parts + 1] = be32(adler32(raw))
+  return table.concat(parts)
+end
+
+-- Try to load libz via LuaJIT FFI. On any failure (no FFI, no libz, ABI
+-- mismatch, runtime error) we leave libz_compress nil and fall back to the
+-- pure-Lua stored-block encoder.
+local libz_compress  -- function(data, level) -> string|nil
+
+local _libz_ok = pcall(function()
+  local ffi = require('ffi')
+  ffi.cdef[[
+    typedef unsigned long alt_image_uLongf;
+    int compress2(uint8_t *dest, alt_image_uLongf *destLen,
+                  const uint8_t *source, alt_image_uLongf sourceLen, int level);
+  ]]
+  local libz = ffi.load('z')
+
+  libz_compress = function(data, level)
+    local src_len = #data
+    local dst_capacity = src_len + math.ceil(src_len / 1000) + 32
+    local dst = ffi.new('uint8_t[?]', dst_capacity)
+    local dst_len = ffi.new('alt_image_uLongf[1]', dst_capacity)
+    local src = ffi.cast('const uint8_t*', data)
+    local rc = libz.compress2(dst, dst_len, src, src_len, level or 6)
+    if rc ~= 0 then return nil end
+    return ffi.string(dst, dst_len[0])
+  end
+end)
+
+if not _libz_ok then libz_compress = nil end
+
+local function zlib_compress(raw)
+  if libz_compress then
+    local out = libz_compress(raw)
+    if out and #out > 0 then return out end
+  end
+  return zlib_store(raw)
+end
+
+---Whether the FFI libz path is active (real DEFLATE) or we're using the
+---stored-block fallback. Useful for healthchecks and tests.
+---@return boolean
+function M.has_libz()
+  return libz_compress ~= nil
+end
+
+---Encode an 8-bit RGBA pixel buffer as a PNG byte string.
+---@param rgba string raw RGBA bytes (4 bytes/pixel, row-major), length = width*height*4
+---@param width integer
+---@param height integer
+---@return string png_bytes
+function M.encode(rgba, width, height)
+  assert(type(rgba) == 'string', 'png.encode: rgba must be a string')
+  assert(#rgba == width * height * 4,
+         'png.encode: rgba length mismatch (expected '
+         .. (width * height * 4) .. ', got ' .. #rgba .. ')')
+
+  local stride = width * 4
+  local scanlines = {}
+  for y = 0, height - 1 do
+    scanlines[#scanlines + 1] = '\0' .. rgba:sub(y * stride + 1, (y + 1) * stride)
+  end
+  local raw = table.concat(scanlines)
+  local idat_payload = zlib_compress(raw)
+
+  local ihdr_data = be32(width) .. be32(height)
+                  .. string.char(8, 6, 0, 0, 0)  -- depth=8, color=RGBA, defaults
+  local ihdr = build_chunk('IHDR', ihdr_data)
+  local idat = build_chunk('IDAT', idat_payload)
+  local iend = build_chunk('IEND', '')
+
+  return PNG_SIGNATURE .. ihdr .. idat .. iend
+end
+
+-- Internal helpers exposed for testing.
+M._crc32 = crc32
+M._adler32 = adler32
 
 return M
