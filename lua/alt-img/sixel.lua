@@ -3,9 +3,11 @@
 -- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
 --   runtime/lua/vim/ui/img/_sixel.lua
 --
--- Decodes the input bytes (PNG only in v1) to RGBA, optionally resizes to
--- the requested cell dims, runs the encoder, caches the result per-placement,
--- and emits the DCS sequence.
+-- Input is required to be PNG bytes — we match the upstream vim.ui.img
+-- contract. Decode, optional resize, sixel-encode, cache per-placement, and
+-- emit the DCS sequence. When `magick` is on PATH we route the entire
+-- decode + resize + sixel-encode through one subprocess so the pure-Lua
+-- decoder/inflater is bypassed (matters most when libz is missing).
 
 local util = require("alt-img._core.util")
 local tty = require("alt-img._core.tty")
@@ -64,20 +66,15 @@ local function canonicalize(opts)
 end
 
 ---For non-ui modes, derive width/height from PNG IHDR if not provided.
----Mutates opts in-place.
----@param data string raw image bytes
+---Mutates opts in-place. Data is guaranteed PNG by the boundary check in
+---M.set, so we read the IHDR unconditionally.
+---@param data string raw PNG bytes
 ---@param opts table canonical opts
 local function derive_dims(data, opts)
     if opts.relative == "ui" or (opts.width and opts.height) then
         return
     end
-    if type(data) ~= "string" then
-        return
-    end
     local px_w, px_h = util.png_dimensions(data)
-    if not px_w then
-        return
-    end
     util.query_cell_size()
     local cell_w, cell_h = util.cell_pixel_size()
     opts.width = opts.width or math.ceil(px_w / cell_w)
@@ -105,16 +102,35 @@ local function build_sixel(s)
         return s.sixel_cache
     end
     util.query_cell_size()
+
+    -- magick fast path: do decode + resize + sixel-encode in one subprocess.
+    -- Bypasses the pure-Lua decoder entirely, which is the dominant cost on
+    -- first display when libz is missing (pure-Lua INFLATE is glacial).
+    if magick.binary() then
+        local out
+        if s.opts.width and s.opts.height then
+            local cw, ch = util.cell_pixel_size()
+            out = magick.encode_sixel_from_png_resized(s.data, s.opts.width * cw, s.opts.height * ch)
+        else
+            out = magick.encode_sixel_from_png(s.data)
+        end
+        if out and #out > 0 then
+            s.sixel_cache = out
+            return s.sixel_cache
+        end
+    end
+
+    -- Pure-Lua fallback: decode, optionally resize, then encode through the
+    -- libsixel-or-pure-Lua dispatcher.
     local rgba, w, h = ensure_resized(s)
     s.sixel_cache = senc.encode_sixel_dispatch(rgba, w, h)
     return s.sixel_cache
 end
 
--- Build a sixel DCS for a sub-rectangle of the source image. The src record
--- describes the crop in image cells; we use the cached resized buffer, slice
--- out the requested sub-rectangle, and encode. When `convert` is available
--- and the placement has not been resized, we feed the original PNG straight
--- to `convert -crop` and skip the decode/crop/re-encode round-trip.
+-- Build a sixel DCS for a sub-rectangle of the resized image. `src` is in
+-- cell units; the carrier math operates in resized-target pixel space, so
+-- the magick fast path uses `-resize WxH! -crop CWxCH+X+Y` to do everything
+-- in one subprocess and skip the pure-Lua decode/resize/crop chain.
 local function build_sixel_cropped(s, src)
     util.query_cell_size()
     local cw, ch = util.cell_pixel_size()
@@ -122,17 +138,11 @@ local function build_sixel_cropped(s, src)
     local y_px = src.y * ch
     local w_px = src.w * cw
     local h_px = src.h * ch
+    local full_w = s.opts.width * cw
+    local full_h = s.opts.height * ch
 
-    -- Fast path: if no resize was requested, feed the original PNG to convert.
-    -- We can detect "no resize" by comparing the resized dims to the PNG's
-    -- IHDR dims. ensure_resized only resizes when opts.width/height is set
-    -- *and* would change the image dims; otherwise it returns the decoded buf.
-    local can_use_png_fast_path = type(s.data) == "string"
-        and util.is_png_data(s.data)
-        and not s.opts.width
-        and not s.opts.height
-    if can_use_png_fast_path then
-        local accel = magick.crop_to_sixel(s.data, x_px, y_px, w_px, h_px)
+    if magick.binary() then
+        local accel = magick.crop_resized_to_sixel(s.data, full_w, full_h, x_px, y_px, w_px, h_px)
         if accel and #accel > 0 then
             return accel
         end
@@ -225,6 +235,9 @@ function M.set(data_or_id, opts)
         data_or_id = { data_or_id, { "string", "number" } },
         opts = { opts, "table", true },
     })
+    if type(data_or_id) == "string" and not util.is_png_data(data_or_id) then
+        error("alt-img.sixel: data must be a PNG byte string (matches vim.ui.img)", 2)
+    end
 
     if type(data_or_id) == "number" then
         -- Update path

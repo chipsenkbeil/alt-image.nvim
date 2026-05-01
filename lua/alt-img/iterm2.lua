@@ -58,20 +58,15 @@ local function canonicalize(opts)
 end
 
 ---For non-ui modes, derive width/height from PNG IHDR if not provided.
----Mutates opts in-place.
----@param data string raw image bytes (may not be PNG; we no-op if not)
+---Mutates opts in-place. Data is guaranteed PNG by the boundary check in
+---M.set, so we read the IHDR unconditionally.
+---@param data string raw PNG bytes
 ---@param opts table canonical opts
 local function derive_dims(data, opts)
     if opts.relative == "ui" or (opts.width and opts.height) then
         return
     end
-    if type(data) ~= "string" then
-        return
-    end
     local px_w, px_h = util.png_dimensions(data)
-    if not px_w then
-        return
-    end
     util.query_cell_size()
     local cell_w, cell_h = util.cell_pixel_size()
     opts.width = opts.width or math.ceil(px_w / cell_w)
@@ -177,16 +172,11 @@ function M._emit_at(id, screen_pos)
         or (src.x == 0 and src.y == 0 and src.w == opts.width and src.h == opts.height)
     local data, b64, width_cells, height_cells
     if is_full then
-        -- Pre-resize to the cell-pixel area via nearest-neighbor before sending,
-        -- so iTerm2's scaler sees a 1:1 mapping (sharp output). We fall back to
-        -- the original bytes when the source isn't decodable PNG (defensive).
-        local ok, resized_png, resized_b64 = pcall(ensure_full_png, s)
-        if ok and resized_png and resized_b64 then
-            data, b64 = resized_png, resized_b64
-        else
-            data = s.data
-            b64 = vim.base64.encode(data)
-        end
+        -- Pre-resize to the cell-pixel area via nearest-neighbor before sending
+        -- so iTerm2's scaler sees a 1:1 mapping (sharp output). Data is always
+        -- PNG (validated at the M.set boundary), so decode failure is a real
+        -- error, not a fallback path.
+        data, b64 = ensure_full_png(s)
         width_cells, height_cells = opts.width, opts.height
     else
         local key = string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
@@ -263,6 +253,9 @@ function M.set(data_or_id, opts)
         data_or_id = { data_or_id, { "string", "number" } },
         opts = { opts, "table", true },
     })
+    if type(data_or_id) == "string" and not util.is_png_data(data_or_id) then
+        error("alt-img.iterm2: data must be a PNG byte string (matches vim.ui.img)", 2)
+    end
 
     if type(data_or_id) == "number" then
         -- Update path

@@ -14,6 +14,12 @@ vim.ui.img = require('alt-img.sixel')    -- foot, mlterm, xterm+sixel, …
 That's it. After this, `vim.ui.img.set / get / del` works the same as on a
 kitty-capable Neovim build.
 
+## Input format
+
+`set(data, opts)` requires `data` to be **PNG bytes** (the same contract as
+upstream `vim.ui.img`). Other formats are not supported and will error at
+the boundary; convert to PNG first if you need to feed in JPEG / WebP / etc.
+
 ---
 
 ## Install
@@ -102,9 +108,8 @@ make smoke-test   # interactive: :AltImgDemo ui|editor|buffer
   garbled when run inside tmux. Use a bare terminal for now.
 - **No external UI / multigrid.** Carrier math assumes the default global
   grid.
-- **Sixel decodes PNG only.** Bytes are decoded via the bundled pure-Lua
-  PNG decoder; other formats fail. iTerm2 passes input bytes through
-  verbatim, so non-PNG may work depending on terminal support.
+- **PNG only.** Both providers require PNG input — see *Input format*
+  above. Non-PNG bytes are rejected at `set()`.
 
 ## Status
 
