@@ -153,7 +153,9 @@ local function tick()
         -- Force TUI grid -> TTY flush so any queued text/float-bg paint lands
         -- BEFORE our image bytes. Without this, the float-bg or text-repaint
         -- output would race past SYNC_END and overwrite the image cells.
-        vim.cmd("redraw")
+        --
+        -- TODO: Is this actually needed?
+        vim.cmd.redraw()
         for _, p in ipairs(emit_set) do
             for _, pos in ipairs(p.next_positions or {}) do
                 p.provider._emit_at(p.id, pos)
