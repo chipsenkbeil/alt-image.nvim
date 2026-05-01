@@ -12,54 +12,36 @@ vim.cmd.source(vim.uv.cwd() .. "/plugin/alt-img.lua")
 local altimg = require("alt-img")
 vim.ui.img = altimg
 
-local function read_fixture()
-    local f = io.open("test/fixtures/4x4.png", "rb")
-    local b = f:read("*a")
-    f:close()
-    return b
+-- ---------------------------------------------------------------------------
+-- Image source for :AltImgTest demo / mouse. Defaults to the vendored 4x4
+-- fixture; `:AltImgTest path /path/to/img.png` swaps it for any PNG on disk.
+-- ---------------------------------------------------------------------------
+
+local DEFAULT_FIXTURE = vim.uv.cwd() .. "/test/fixtures/4x4.png"
+local image_path = nil ---@type string?
+
+local function resolved_image_path()
+    return image_path or DEFAULT_FIXTURE
 end
 
-vim.api.nvim_create_user_command("AltImgDemo", function(o)
-    local mode = o.args ~= "" and o.args or "ui"
-    local data = read_fixture()
-    local opts = { row = 5, col = 10, width = 4, height = 4 }
-    if mode == "editor" then
-        opts.relative = "editor"
-    elseif mode == "buffer" then
-        -- Demonstrate PR #39496 defaulting: opts.buf set => relative='buffer';
-        -- buf=0 resolves to the current buffer. width/height are kept from above
-        -- so the demo image stays small (otherwise they'd derive from the PNG).
-        opts.buf = 0
-        opts.row, opts.col = 1, 1
-        opts.pad = 1
+local function read_image()
+    local path = resolved_image_path()
+    local f, err = io.open(path, "rb")
+    if not f then
+        error("AltImgTest: failed to read " .. path .. ": " .. (err or "unknown"))
     end
-    local id = vim.ui.img.set(data, opts)
-    print(string.format("AltImgDemo: placed %s id=%d (run :AltImgDel %d to remove)", mode, id, id))
-end, { nargs = "?" })
+    local data = f:read("*a")
+    f:close()
+    return data
+end
 
-vim.api.nvim_create_user_command("AltImgDel", function(o)
-    local arg = o.args
-    if arg == "inf" or arg == "all" then
-        vim.ui.img.del(math.huge)
-        return
-    end
-    local id = tonumber(arg)
-    if not id then
-        print("Usage: AltImgDel <id> | AltImgDel inf")
-        return
-    end
-    vim.ui.img.del(id)
-end, { nargs = 1 })
+-- ---------------------------------------------------------------------------
+-- Mouse-follow plumbing. Same behavior as the previous :AltImgMouse, just
+-- callable via :AltImgTest mouse {ui|editor|off}.
+-- ---------------------------------------------------------------------------
 
--- Image-follows-mouse mode. Toggle on/off and switch the relative= mode
--- without removing/recreating the placement (uses set(id, opts) updates).
 local mouse_state = { id = nil, mode = "ui", mapping = nil }
 
--- Coalesce mouse-follow updates: <MouseMove> can fire faster than the
--- synchronous render flush completes. Defer via vim.schedule and read the
--- latest mouse position lazily inside the scheduled callback. While a
--- schedule is pending, subsequent fires return early — they all collapse
--- into a single set() at the latest position.
 local update_pending = false
 local function update_from_mouse()
     if not mouse_state.id or update_pending then
@@ -96,9 +78,8 @@ end
 local function mouse_on(mode)
     mouse_off()
     mouse_state.mode = mode
-    local data = read_fixture()
     local pos = vim.fn.getmousepos()
-    mouse_state.id = vim.ui.img.set(data, {
+    mouse_state.id = vim.ui.img.set(read_image(), {
         relative = mode,
         row = pos.screenrow > 0 and pos.screenrow or 1,
         col = pos.screencol > 0 and pos.screencol or 1,
@@ -108,33 +89,11 @@ local function mouse_on(mode)
     vim.keymap.set("", "<MouseMove>", update_from_mouse, { silent = true, desc = "alt-img mouse-follow" })
     mouse_state.mapping = true
     print(
-        "AltImgMouse: following mouse with relative="
+        "AltImgTest: mouse-follow on with relative="
             .. mode
-            .. ". Run :AltImgMouse off to stop, or :AltImgMouse <ui|editor> to switch."
+            .. ". `:AltImgTest mouse off` to stop, or `:AltImgTest mouse {ui|editor}` to switch."
     )
 end
-
-vim.api.nvim_create_user_command("AltImgMouse", function(o)
-    local arg = o.args ~= "" and o.args or "ui"
-    if arg == "off" then
-        mouse_off()
-        return
-    end
-    if arg ~= "ui" and arg ~= "editor" then
-        print("Usage: AltImgMouse {ui|editor|off}")
-        return
-    end
-    mouse_on(arg)
-end, {
-    nargs = "?",
-    complete = function()
-        return { "ui", "editor", "off" }
-    end,
-})
-
--- :AltImg info / :AltImg refresh come from plugin/alt-img.lua (sourced
--- above). Keep AltImgProvider, AltImgDemo, AltImgMouse, AltImgDel here —
--- those are smoke-test scaffolding rather than production diagnostics.
 
 local function provider_name()
     local img = vim.ui.img
@@ -159,48 +118,235 @@ local function provider_name()
     return "<unknown>"
 end
 
-vim.api.nvim_create_user_command("AltImgProvider", function(o)
-    local arg = o.args ~= "" and o.args or "auto"
-    if arg ~= "iterm2" and arg ~= "sixel" and arg ~= "auto" then
-        print("Usage: AltImgProvider {iterm2|sixel|auto}")
+-- ---------------------------------------------------------------------------
+-- :AltImgTest subcommand registry — mirrors the lumen-oss best-practices
+-- pattern used by `:AltImg` in plugin/alt-img.lua. Smoke-test scaffolding
+-- only; production diagnostics live under `:AltImg`.
+-- ---------------------------------------------------------------------------
+
+local subs = {}
+
+subs.path = {
+    desc = "Show or set the PNG used by :AltImgTest demo / mouse.",
+    impl = function(args)
+        if #args == 0 then
+            print(
+                "AltImgTest: image source = " .. resolved_image_path() .. (image_path and "" or "  (default fixture)")
+            )
+            return
+        end
+        local arg = args[1]
+        if arg == "default" or arg == "reset" then
+            image_path = nil
+            print("AltImgTest: image source reset to default fixture (" .. DEFAULT_FIXTURE .. ")")
+            return
+        end
+        local p = vim.fn.expand(arg)
+        if vim.fn.filereadable(p) ~= 1 then
+            vim.notify("AltImgTest: not readable: " .. p, vim.log.levels.ERROR)
+            return
+        end
+        image_path = p
+        print("AltImgTest: image source = " .. p)
+    end,
+    complete = function(arg_lead)
+        -- File completion handles relative/absolute/`~/` correctly via getcompletion.
+        local out = vim.fn.getcompletion(arg_lead, "file")
+        -- "default" / "reset" are valid bare strings too — surface them.
+        for _, kw in ipairs({ "default", "reset" }) do
+            if kw:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = kw
+            end
+        end
+        return out
+    end,
+}
+
+subs.demo = {
+    desc = "Place the current image in {ui|editor|buffer} mode.",
+    impl = function(args)
+        local mode = args[1] or "ui"
+        if mode ~= "ui" and mode ~= "editor" and mode ~= "buffer" then
+            vim.notify("Usage: :AltImgTest demo {ui|editor|buffer}", vim.log.levels.ERROR)
+            return
+        end
+        local opts = { row = 5, col = 10, width = 4, height = 4 }
+        if mode == "editor" then
+            opts.relative = "editor"
+        elseif mode == "buffer" then
+            -- buf=0 resolves to current buffer; relative='buffer' is implied.
+            -- width/height stay set so the demo image stays small (otherwise
+            -- they'd derive from the PNG IHDR).
+            opts.buf = 0
+            opts.row, opts.col = 1, 1
+            opts.pad = 1
+        end
+        local id = vim.ui.img.set(read_image(), opts)
+        print(string.format("AltImgTest demo: placed %s id=%d  (`:AltImgTest del %d` to remove)", mode, id, id))
+    end,
+    complete = function(arg_lead)
+        local out = {}
+        for _, m in ipairs({ "ui", "editor", "buffer" }) do
+            if m:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = m
+            end
+        end
+        return out
+    end,
+}
+
+subs.del = {
+    desc = "Remove a placement by id, or `inf` / `all` for everything.",
+    impl = function(args)
+        local arg = args[1]
+        if not arg then
+            vim.notify("Usage: :AltImgTest del {<id>|inf|all}", vim.log.levels.ERROR)
+            return
+        end
+        if arg == "inf" or arg == "all" then
+            vim.ui.img.del(math.huge)
+            return
+        end
+        local id = tonumber(arg)
+        if not id then
+            vim.notify("AltImgTest: not a valid id: " .. arg, vim.log.levels.ERROR)
+            return
+        end
+        vim.ui.img.del(id)
+    end,
+    complete = function(arg_lead)
+        local out = {}
+        for _, kw in ipairs({ "inf", "all" }) do
+            if kw:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = kw
+            end
+        end
+        return out
+    end,
+}
+
+subs.mouse = {
+    desc = "Image-follows-mouse. {ui|editor|off}.",
+    impl = function(args)
+        local arg = args[1] or "ui"
+        if arg == "off" then
+            mouse_off()
+            return
+        end
+        if arg ~= "ui" and arg ~= "editor" then
+            vim.notify("Usage: :AltImgTest mouse {ui|editor|off}", vim.log.levels.ERROR)
+            return
+        end
+        mouse_on(arg)
+    end,
+    complete = function(arg_lead)
+        local out = {}
+        for _, m in ipairs({ "ui", "editor", "off" }) do
+            if m:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = m
+            end
+        end
+        return out
+    end,
+}
+
+subs.provider = {
+    desc = "Force a specific vim.ui.img provider {iterm2|sixel|auto}.",
+    impl = function(args)
+        local arg = args[1] or "auto"
+        if arg ~= "iterm2" and arg ~= "sixel" and arg ~= "auto" then
+            vim.notify("Usage: :AltImgTest provider {iterm2|sixel|auto}", vim.log.levels.ERROR)
+            return
+        end
+        pcall(function()
+            vim.ui.img.del(math.huge)
+        end)
+        -- Mouse-follow id was tied to the old provider; clear it.
+        mouse_off()
+        if arg == "iterm2" then
+            vim.ui.img = require("alt-img.iterm2")
+        elseif arg == "sixel" then
+            vim.ui.img = require("alt-img.sixel")
+        else
+            package.loaded["alt-img"] = nil
+            vim.ui.img = require("alt-img")
+        end
+        print("AltImgTest: provider = " .. provider_name())
+    end,
+    complete = function(arg_lead)
+        local out = {}
+        for _, p in ipairs({ "iterm2", "sixel", "auto" }) do
+            if p:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = p
+            end
+        end
+        return out
+    end,
+}
+
+local function sub_names()
+    local out = {}
+    for k in pairs(subs) do
+        out[#out + 1] = k
+    end
+    table.sort(out)
+    return out
+end
+
+vim.api.nvim_create_user_command("AltImgTest", function(opts)
+    local fargs = opts.fargs or {}
+    local sub = fargs[1]
+    if not sub then
+        vim.notify("Usage: :AltImgTest <" .. table.concat(sub_names(), "|") .. ">", vim.log.levels.INFO)
         return
     end
-
-    -- Clear old placements via the currently-active provider
-    pcall(function()
-        vim.ui.img.del(math.huge)
-    end)
-
-    -- If mouse-follow is active, kill it (its mouse_state.id was tied to the old provider).
-    pcall(function()
-        vim.cmd("AltImgMouse off")
-    end)
-
-    if arg == "iterm2" then
-        vim.ui.img = require("alt-img.iterm2")
-    elseif arg == "sixel" then
-        vim.ui.img = require("alt-img.sixel")
-    else
-        -- auto: reset autodetect cache + reload alt-img so detect() runs fresh
-        package.loaded["alt-img"] = nil
-        vim.ui.img = require("alt-img")
+    local entry = subs[sub]
+    if not entry then
+        vim.notify(
+            string.format("AltImgTest: unknown subcommand `%s`. Try one of: %s", sub, table.concat(sub_names(), ", ")),
+            vim.log.levels.ERROR
+        )
+        return
     end
-    print("AltImgProvider: now using " .. provider_name())
+    local rest = {}
+    for i = 2, #fargs do
+        rest[#rest + 1] = fargs[i]
+    end
+    entry.impl(rest, opts)
 end, {
-    nargs = "?",
-    complete = function()
-        return { "iterm2", "sixel", "auto" }
+    nargs = "*",
+    desc = "alt-img.nvim smoke-test scaffolding (path, demo, del, mouse, provider)",
+    complete = function(arg_lead, line, _pos)
+        local trimmed = (line or ""):gsub("^%s*AltImgTest!?%s*", "")
+        local args = vim.split(trimmed, "%s+", { trimempty = true })
+        local has_trailing_space = trimmed:match("%s$") ~= nil
+        local completing_sub = (#args == 0) or (#args == 1 and not has_trailing_space)
+        if completing_sub then
+            local out = {}
+            for _, name in ipairs(sub_names()) do
+                if name:find("^" .. vim.pesc(arg_lead)) then
+                    out[#out + 1] = name
+                end
+            end
+            return out
+        end
+        local entry = subs[args[1]]
+        if entry and entry.complete then
+            return entry.complete(arg_lead) or {}
+        end
+        return {}
     end,
 })
 
 print("alt-img.nvim smoke test ready.")
 print("Try:")
-print("  :AltImgDemo ui|editor|buffer")
-print("  :AltImgDel <id>     (or `inf` to clear all)")
-print("  :AltImgMouse ui     (image follows mouse, absolute terminal coords)")
-print("  :AltImgMouse editor (image follows mouse, relative to editor)")
-print("  :AltImgMouse off    (stop following)")
-print("  :AltImg info                       (diagnostics: terminal + provider state)")
-print("  :AltImg refresh                    (force re-emit after :mode / :redraw! / external clear)")
-print("  :AltImgProvider iterm2|sixel|auto  (switch vim.ui.img provider)")
+print("  :AltImgTest path /path/to/img.png   (set the image used by demo / mouse)")
+print("  :AltImgTest path                    (show current image source)")
+print("  :AltImgTest path default            (reset to test/fixtures/4x4.png)")
+print("  :AltImgTest demo {ui|editor|buffer} (place a static image)")
+print("  :AltImgTest del {<id>|inf|all}      (remove a placement)")
+print("  :AltImgTest mouse {ui|editor|off}   (image follows mouse)")
+print("  :AltImgTest provider {iterm2|sixel|auto} (force a provider)")
+print("  :AltImg info                        (production diagnostics)")
+print("  :AltImg refresh                     (force re-emit)")
 print("  :checkhealth alt-img alt-img.iterm2 alt-img.sixel")
