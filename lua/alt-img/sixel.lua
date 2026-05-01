@@ -99,13 +99,16 @@ local function ensure_resized(s)
 end
 
 -- Read sixel_pixel_scale fresh on each build so toggling it in vim.g
--- without restarting takes effect on the next render. Clamp to >= 1.
+-- without restarting takes effect on the next render. When the user
+-- hasn't set an explicit value, fall back to util.iterm2_scale() which
+-- queries OSC 1337 ReportCellSize on iTerm2 (returns 2 on retina, 1
+-- elsewhere) and 1 on every other terminal. Clamp explicit values to >= 1.
 local function sixel_scale()
-    local s = (_config.read() or {}).sixel_pixel_scale or 1
-    if type(s) ~= "number" or s < 1 then
-        return 1
+    local s = (_config.read() or {}).sixel_pixel_scale
+    if type(s) == "number" then
+        return math.max(1, math.floor(s))
     end
-    return math.floor(s)
+    return util.iterm2_scale()
 end
 
 local function build_sixel(s)

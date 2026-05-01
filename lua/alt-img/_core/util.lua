@@ -185,6 +185,59 @@ function M.query_cell_size()
     M._query_cell_size_csi16t()
 end
 
+-- iTerm2 retina-scale tracking. iTerm2's sixel renderer uses physical
+-- (retina) pixels rather than logical, so a sixel encoded at the cell
+-- pixel size (8x16) renders at half the requested area on a 2x display.
+-- This value is the multiplier the sixel encoder applies on top of
+-- cell_pixel_size to compensate; default 1 (non-retina or non-iTerm2),
+-- queried via OSC 1337 ReportCellSize where supported.
+M._iterm2_scale = 1
+M._iterm2_scale_queried = false
+
+---@private
+function M._query_iterm2_scale_osc1337()
+    -- Other terminals don't honor OSC 1337 ReportCellSize and we shouldn't
+    -- send it speculatively — some respond with garbage, some echo as
+    -- text. Gate on TERM_PROGRAM so the query only fires where it's known
+    -- safe.
+    if vim.env.TERM_PROGRAM ~= "iTerm.app" then
+        return
+    end
+    local timeout = 500
+    local done = false
+    tty.query("\027]1337;ReportCellSize\007", { timeout = timeout }, function(resp)
+        -- iTerm2 replies with: ESC ] 1337 ; ReportCellSize=<h>;<w>;<scale> BEL
+        -- Some builds emit ST (`\e\\`) instead of BEL — we don't care which,
+        -- the captured `scale` is what matters.
+        local _h, _w, scale = (resp or ""):match("ReportCellSize=([%d%.]+);([%d%.]+);([%d%.]+)")
+        if scale then
+            local n = tonumber(scale)
+            if n and n >= 1 then
+                M._iterm2_scale = math.floor(n)
+            end
+            done = true
+            return true
+        end
+        return false
+    end)
+    vim.wait(timeout + 100, function()
+        return done
+    end)
+end
+
+---Return the cached iTerm2 retina scale factor (1, 2, …). Triggers a
+---synchronous OSC 1337 ReportCellSize query on first call so the value
+---reflects the host terminal's actual scale, then caches until a
+---VimResized/UIEnter invalidates. On non-iTerm2 terminals always 1.
+---@return integer
+function M.iterm2_scale()
+    if not M._iterm2_scale_queried then
+        M._iterm2_scale_queried = true
+        M._query_iterm2_scale_osc1337()
+    end
+    return M._iterm2_scale
+end
+
 -- Invalidate the cache on resize / UI re-attach. The augroup pattern
 -- with `clear = true` keeps reloads (tests, :Lazy reload) from stacking
 -- duplicate handlers.
@@ -193,6 +246,7 @@ vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
     group = AUGROUP,
     callback = function()
         M._cell_size_queried = false
+        M._iterm2_scale_queried = false
     end,
 })
 

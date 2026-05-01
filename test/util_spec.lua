@@ -207,6 +207,87 @@ describe("_core.util cell size", function()
     end)
 end)
 
+describe("_core.util iterm2_scale", function()
+    local tty = require("alt-img._core.tty")
+    local saved_query = tty.query
+    local saved_term_program = vim.env.TERM_PROGRAM
+
+    local function reload_util()
+        package.loaded["alt-img._core.util"] = nil
+        return require("alt-img._core.util")
+    end
+
+    after_each(function()
+        tty.query = saved_query
+        vim.env.TERM_PROGRAM = saved_term_program
+    end)
+
+    it("returns 1 when TERM_PROGRAM is not iTerm.app and never queries", function()
+        vim.env.TERM_PROGRAM = "WezTerm"
+        local sent = false
+        tty.query = function(payload, _opts, _cb)
+            sent = true
+        end
+        local util = reload_util()
+        assert.equals(1, util.iterm2_scale())
+        assert.is_false(sent)
+    end)
+
+    it("parses scale from OSC 1337 ReportCellSize on iTerm2", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        local sent
+        tty.query = function(payload, _opts, cb)
+            sent = payload
+            cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+        end
+        local util = reload_util()
+        assert.equals(2, util.iterm2_scale())
+        assert.equals("\027]1337;ReportCellSize\007", sent)
+    end)
+
+    it("keeps the default of 1 when iTerm2 doesn't respond", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        tty.query = function(_payload, _opts, _cb)
+            -- Simulate no response (callback never fires).
+        end
+        local util = reload_util()
+        assert.equals(1, util.iterm2_scale())
+    end)
+
+    it("ignores malformed responses and stays at 1", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        tty.query = function(_payload, _opts, cb)
+            cb("\027[?6c") -- DA1 reply, not OSC 1337
+        end
+        local util = reload_util()
+        assert.equals(1, util.iterm2_scale())
+    end)
+
+    it("clamps fractional or below-1 scale to integer >= 1", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        tty.query = function(_payload, _opts, cb)
+            cb("\027]1337;ReportCellSize=24.0;12.0;0.5\007")
+        end
+        local util = reload_util()
+        -- 0.5 is below 1; the parser keeps the default of 1.
+        assert.equals(1, util.iterm2_scale())
+    end)
+
+    it("queries only once and caches the result", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        local calls = 0
+        tty.query = function(_payload, _opts, cb)
+            calls = calls + 1
+            cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+        end
+        local util = reload_util()
+        assert.equals(2, util.iterm2_scale())
+        assert.equals(2, util.iterm2_scale())
+        assert.equals(2, util.iterm2_scale())
+        assert.equals(1, calls)
+    end)
+end)
+
 describe("_core.util.resolve_binary", function()
     local util = require("alt-img._core.util")
 

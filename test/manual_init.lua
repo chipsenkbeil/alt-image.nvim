@@ -225,10 +225,12 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
         )
     )
     -- Sixel-specific: the encoder multiplies opts.width/height × cell pixels
-    -- by this factor before handing to magick / img2sixel. Default 1; set
-    -- to 2 on retina iTerm2 (whose sixel renderer uses physical pixels
-    -- rather than logical, so 1× sixel undershoots the cell area by 50%).
+    -- by this factor before handing to magick / img2sixel. When the user
+    -- hasn't set vim.g.alt_img.sixel_pixel_scale, the encoder auto-detects
+    -- from iTerm2's OSC 1337 ReportCellSize (= screen scale factor; 2 on
+    -- retina, 1 elsewhere; 1 on non-iTerm2 terminals).
     table.insert(lines, string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale)))
+    table.insert(lines, string.format("  iterm2 scale (OSC 1337)         = %d×", util.iterm2_scale()))
 
     -- Active placements per provider, with their resolved opts (post-derive_dims).
     -- Useful when the displayed image looks wrong-sized — opts.width/height

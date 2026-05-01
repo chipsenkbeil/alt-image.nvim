@@ -8,16 +8,17 @@
 --     magick             = { 'magick', 'convert' },   -- string | string[] | false
 --     img2sixel          = 'img2sixel',               -- string | string[] | false
 --     crop_cache_size    = 64,                        -- integer (LRU max per placement)
---     sixel_pixel_scale  = 1,                         -- integer (multiply sixel encode dims)
+--     sixel_pixel_scale  = nil,                       -- integer override; nil = auto
 --   }
 --
 -- `sixel_pixel_scale` exists because iTerm2's sixel renderer treats sixel
 -- pixels as PHYSICAL (retina) pixels — so a 32x64 sixel on a 2x display
 -- shows up at 16x32 logical pixels, not the 4x4 cells the encoder asked
--- for. Setting this to 2 on retina iTerm2 doubles the encoded sixel
--- dimensions so the rendered output fills the requested cell area.
--- Other sixel terminals (foot, mlterm, contour, WT, WezTerm) render at
--- 1 sixel-pixel = 1 logical-pixel and keep this at the default 1.
+-- for. When unset (the default), the sixel encoder reads iTerm2's
+-- OSC 1337 ReportCellSize to discover the screen scale factor and uses
+-- that as the multiplier; on non-iTerm2 terminals the auto-detect returns
+-- 1, matching the standard sixel semantics. Setting an integer here
+-- forces a specific multiplier and skips the auto-detect.
 --
 -- All fields are optional; missing fields fall back to the defaults below.
 -- Read happens at call-time (not require-time) so user config can be set
@@ -42,7 +43,9 @@ local DEFAULTS = {
     magick = { "magick", "convert" },
     img2sixel = { "img2sixel" },
     crop_cache_size = 64,
-    sixel_pixel_scale = 1,
+    -- sixel_pixel_scale is intentionally absent so callers can detect
+    -- "user did not set this" (nil) and fall back to auto-detect via
+    -- util.iterm2_scale(). An explicit integer in vim.g.alt_img wins.
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_img).
