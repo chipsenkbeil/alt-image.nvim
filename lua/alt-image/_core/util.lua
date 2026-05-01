@@ -218,26 +218,25 @@ function M._reset_executable_cache()
   for k in pairs(_executable_cache) do _executable_cache[k] = nil end
 end
 
----Resolve a `vim.g.alt_image.<tool>` configuration value to the binary name
----we should invoke, or nil if no candidate is usable.
+---Resolve a config value to a binary name we should invoke, or nil if none
+---is usable. Pure function — defaults belong in `_core/config.lua`, not here.
 ---
 ---Accepted shapes:
----  - `false`           → disabled, returns nil.
----  - `string`          → that exact binary if executable, else nil.
----  - `string[]`        → first candidate that is executable, else nil.
----  - `nil` / unset     → falls through to `defaults` (treated as a string[]).
+---  - falsy (`false` / `nil`) → returns nil (tool path disabled).
+---  - `string`                → that exact binary if executable, else nil.
+---  - `string[]`              → first candidate that is executable, else nil.
 ---
----@param cfg any user-supplied config value (typically vim.g.alt_image.<tool>)
----@param defaults string[] fallback candidate list when cfg is nil/unset
+---@param cfg string|string[]|false|nil
 ---@return string?
-function M.resolve_binary(cfg, defaults)
-  if cfg == false then return nil end
+function M.resolve_binary(cfg)
+  if not cfg then return nil end
   if type(cfg) == 'string' then
     return M._executable(cfg) and cfg or nil
   end
-  local candidates = (type(cfg) == 'table') and cfg or defaults
-  for _, name in ipairs(candidates or {}) do
-    if M._executable(name) then return name end
+  if type(cfg) == 'table' then
+    for _, name in ipairs(cfg) do
+      if M._executable(name) then return name end
+    end
   end
   return nil
 end

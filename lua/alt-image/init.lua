@@ -4,22 +4,13 @@
 --   vim.ui.img = require('alt-image')
 -- works identically to vim.ui.img on a kitty-supporting terminal.
 --
--- Configuration is read from `vim.g.alt_image` at call-time:
---
---   vim.g.alt_image = {
---     protocol  = 'auto',                    -- 'iterm2' | 'sixel' | 'auto' (default)
---     magick    = { 'magick', 'convert' },   -- string | string[] | false.
---                                            -- nil/unset = { 'magick', 'convert' }.
---     img2sixel = 'img2sixel',               -- string | string[] | false.
---                                            -- nil/unset = { 'img2sixel' }.
---   }
---
--- The tool fields accept a single binary name, a list of candidates (first
--- executable wins), or `false` to disable. Reading at call-time means callers
--- can set `vim.g.alt_image` after `require('alt-image')` and still see the
--- effect.
+-- Configuration: see `_core/config.lua`. Users override individual fields via
+-- `vim.g.alt_image = { ... }`; defaults are baked into the plugin per the
+-- nvim-best-practices "no setup() function required" pattern.
 
 local M = {}
+
+local config = require('alt-image._core.config')
 
 local PROVIDERS = {
   iterm2 = function() return require('alt-image.iterm2') end,
@@ -30,18 +21,9 @@ local DETECT_ORDER = { 'iterm2', 'sixel' }
 
 local cached_provider = nil
 
--- ---------------------------------------------------------------------------
--- Config helpers (read vim.g.alt_image at call-time).
--- ---------------------------------------------------------------------------
-
-local function user_protocol()
-  local g = vim.g.alt_image or {}
-  return g.protocol
-end
-
 local function detect()
-  local proto = user_protocol()
-  if proto and proto ~= 'auto' then
+  local proto = config.read().protocol
+  if proto ~= 'auto' then
     if not PROVIDERS[proto] then
       error('alt-image: unknown protocol ' .. tostring(proto))
     end
@@ -76,8 +58,8 @@ function M.get(id)   return M._provider().get(id)   end
 function M.del(id)   return M._provider().del(id)   end
 
 function M._supported(o)
-  local proto = user_protocol()
-  if proto and proto ~= 'auto' then
+  local proto = config.read().protocol
+  if proto ~= 'auto' then
     if not PROVIDERS[proto] then return false end
     local ok, msg = PROVIDERS[proto]()._supported(o)
     if ok then return true, proto .. ': ' .. (msg or '') end

@@ -131,6 +131,111 @@ describe('_util.clip_to_bounds', function()
   end)
 end)
 
+describe('_core.util.resolve_binary', function()
+  local util = require('alt-image._core.util')
+
+  local function with_executable(executable_for, fn)
+    local saved = vim.fn.executable
+    vim.fn.executable = function(name)
+      local v = executable_for[name]
+      if v == true  then return 1 end
+      if v == false then return 0 end
+      return saved(name)
+    end
+    util._reset_executable_cache()
+    local ok, err = pcall(fn)
+    vim.fn.executable = saved
+    util._reset_executable_cache()
+    if not ok then error(err, 0) end
+  end
+
+  it('returns nil for nil cfg', function()
+    with_executable({ magick = true }, function()
+      assert.is_nil(util.resolve_binary(nil))
+    end)
+  end)
+
+  it('returns nil for false cfg', function()
+    with_executable({ magick = true }, function()
+      assert.is_nil(util.resolve_binary(false))
+    end)
+  end)
+
+  it('returns the string when executable', function()
+    with_executable({ magick = true }, function()
+      assert.equals('magick', util.resolve_binary('magick'))
+    end)
+  end)
+
+  it('returns nil when string is not executable', function()
+    with_executable({ magick = false }, function()
+      assert.is_nil(util.resolve_binary('magick'))
+    end)
+  end)
+
+  it('returns first executable from a list', function()
+    with_executable({ magick = false, convert = true }, function()
+      assert.equals('convert', util.resolve_binary({ 'magick', 'convert' }))
+    end)
+  end)
+
+  it('returns nil when no list candidate is executable', function()
+    with_executable({ magick = false, convert = false }, function()
+      assert.is_nil(util.resolve_binary({ 'magick', 'convert' }))
+    end)
+  end)
+
+  it('returns nil for an empty list', function()
+    with_executable({ magick = true }, function()
+      assert.is_nil(util.resolve_binary({}))
+    end)
+  end)
+end)
+
+describe('_core.config', function()
+  local config = require('alt-image._core.config')
+
+  local function with_g(value, fn)
+    local saved = vim.g.alt_image
+    vim.g.alt_image = value
+    local ok, err = pcall(fn)
+    vim.g.alt_image = saved
+    if not ok then error(err, 0) end
+  end
+
+  it('returns full defaults when vim.g.alt_image is unset', function()
+    with_g(nil, function()
+      local c = config.read()
+      assert.equals('auto', c.protocol)
+      assert.same({ 'magick', 'convert' }, c.magick)
+      assert.same({ 'img2sixel' }, c.img2sixel)
+    end)
+  end)
+
+  it('user fields override defaults; missing fields fall back', function()
+    with_g({ magick = false }, function()
+      local c = config.read()
+      assert.equals('auto', c.protocol)
+      assert.equals(false, c.magick)
+      assert.same({ 'img2sixel' }, c.img2sixel)
+    end)
+  end)
+
+  it('user array replaces default array (no index merge)', function()
+    -- Regression guard: a deep merge would index-extend and produce
+    -- { 'gm', 'convert' } here; we want full replacement.
+    with_g({ magick = { 'gm' } }, function()
+      assert.same({ 'gm' }, config.read().magick)
+    end)
+  end)
+
+  it('defaults() returns a copy, not the live table', function()
+    local d = config.defaults()
+    d.protocol = 'mutated'
+    assert.equals('auto', config.defaults().protocol)
+  end)
+end)
+
 describe('_sixel_encode', function()
   it('encodes a 4x4 solid-red RGBA buffer to a DCS sequence', function()
     -- 4x4 fully opaque red

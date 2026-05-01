@@ -1,26 +1,17 @@
 -- alt-image internal wrapper around the ImageMagick CLI (`magick` / `convert`).
---
--- Resolves the binary to invoke from `vim.g.alt_image.magick`:
---   - string:   use that exact binary if executable; else nil.
---   - string[]: first candidate that is executable; else nil.
---   - false:    never use any magick binary.
---   - nil / unset: auto-detect by trying `magick` (IM7) then `convert`
---     (IM6, plus IM7's compat shim).
---
--- Exposes thin helpers that subprocess out to the resolved binary for the
--- crop / encode operations the alt-image providers need. Returns nil on any
--- failure so the caller can fall back to the pure-Lua paths.
+-- Honors `vim.g.alt_image.magick` per the alt-image config contract — see
+-- `_core/config.lua`. Returns nil from every helper on any failure so the
+-- caller can fall back to the pure-Lua paths.
 
 local M = {}
 
-local _util = require('alt-image._core.util')
-
-local DEFAULTS = { 'magick', 'convert' }
+local _util   = require('alt-image._core.util')
+local _config = require('alt-image._core.config')
 
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-  return _util.resolve_binary((vim.g.alt_image or {}).magick, DEFAULTS)
+  return _util.resolve_binary(_config.read().magick)
 end
 
 ---Run a subprocess synchronously and return stdout on success, nil on fail.

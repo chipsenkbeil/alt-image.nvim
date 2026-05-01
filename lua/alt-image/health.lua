@@ -8,16 +8,16 @@ local M = {}
 local PROTOCOLS = { 'iterm2', 'sixel' }
 
 local function active_provider_line(h)
-  local mod = require('alt-image')
-  local g = vim.g.alt_image or {}
-  local proto = g.protocol
+  local mod    = require('alt-image')
+  local config = require('alt-image._core.config')
+  local proto  = config.read().protocol
 
-  if proto and proto ~= 'auto' then
+  if proto ~= 'auto' then
     h.ok(string.format('Active provider: %s (forced via vim.g.alt_image.protocol)', proto))
     return
   end
 
-  -- protocol is 'auto' or unset. Run detection to report what _provider() picks.
+  -- protocol is 'auto'. Run detection to report what _provider() picks.
   -- Wrap in pcall: if no terminal supports either, _provider() throws.
   local ok, p = pcall(mod._provider)
   if ok then
