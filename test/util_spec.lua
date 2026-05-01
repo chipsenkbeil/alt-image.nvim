@@ -210,7 +210,6 @@ end)
 describe("_core.util terminal_pixel_scale", function()
     local tty = require("alt-img._core.tty")
     local saved_query = tty.query
-    local saved_term_program = vim.env.TERM_PROGRAM
 
     local function reload_util()
         package.loaded["alt-img._core.util"] = nil
@@ -234,36 +233,14 @@ describe("_core.util terminal_pixel_scale", function()
 
     after_each(function()
         tty.query = saved_query
-        vim.env.TERM_PROGRAM = saved_term_program
     end)
 
-    it("OSC 1337: parses scale on iTerm.app", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
-        mock_tty_responses({
-            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;2.0\007" },
-        })
-        local util = reload_util()
-        assert.equals(2, util.terminal_pixel_scale())
-    end)
-
-    it("OSC 1337: parses scale on WezTerm", function()
-        vim.env.TERM_PROGRAM = "WezTerm"
-        mock_tty_responses({
-            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=20.0;10.0;2.0\007" },
-        })
-        local util = reload_util()
-        assert.equals(2, util.terminal_pixel_scale())
-    end)
-
-    it("falls back to CSI 14t/18t cross-check when OSC 1337 is unavailable", function()
-        -- Foot/mlterm/contour don't respond to OSC 1337, but DO answer
-        -- CSI 14t and CSI 18t. Scenario: 64 cols × 32 rows window with
-        -- 8×16 cells. Logical window = 512×512; on a 2× HiDPI display
-        -- the terminal reports CSI 14t in physical pixels (1024×1024)
-        -- while CSI 16t stays logical (8×16). The implied per-cell
-        -- pixel size from 14t/18t is 16×32 — exactly 2× CSI 16t — so
-        -- we infer scale=2.
-        vim.env.TERM_PROGRAM = "foot"
+    it("infers scale=2 when CSI 14t reports physical pixels and CSI 16t stays logical", function()
+        -- Scenario: 64 cols × 32 rows window with 8×16 cells. Logical
+        -- window = 512×512; on a 2× HiDPI display the terminal reports
+        -- CSI 14t in physical pixels (1024×1024) while CSI 16t stays
+        -- logical (8×16). The implied per-cell pixel size from 14t/18t
+        -- is 16×32 — exactly 2× CSI 16t — so we infer scale=2.
         mock_tty_responses({
             -- CSI 16t reply format: ESC [ 6 ; <h> ; <w> t
             { match = "%[16t", reply = "\027[6;16;8t" },
@@ -276,10 +253,9 @@ describe("_core.util terminal_pixel_scale", function()
         assert.equals(2, util.terminal_pixel_scale())
     end)
 
-    it("CSI fallback returns 1 when window pixels and cells agree", function()
+    it("returns 1 when window pixels and cells agree", function()
         -- Same window geometry but CSI 14t reports LOGICAL (512×512).
         -- Implied cell size = CSI 16t = no scaling.
-        vim.env.TERM_PROGRAM = "foot"
         mock_tty_responses({
             { match = "%[16t", reply = "\027[6;16;8t" },
             { match = "%[14t", reply = "\027[4;512;512t" },
@@ -289,8 +265,7 @@ describe("_core.util terminal_pixel_scale", function()
         assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("returns 1 when OSC 1337 doesn't respond and CSI queries fail too", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
+    it("returns 1 when CSI queries don't respond at all", function()
         tty.query = function(_payload, _opts, _cb)
             -- never responds
         end
@@ -298,51 +273,43 @@ describe("_core.util terminal_pixel_scale", function()
         assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("ignores malformed OSC 1337 responses and falls through", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
+    it("returns 1 when CSI 14t responds but CSI 18t doesn't", function()
         mock_tty_responses({
-            { match = "1337;ReportCellSize", reply = "\027[?6c" },
             { match = "%[16t", reply = "\027[6;16;8t" },
-            { match = "%[14t", reply = "\027[4;256;512t" },
-            { match = "%[18t", reply = "\027[8;32;64t" },
+            { match = "%[14t", reply = "\027[4;1024;1024t" },
+            -- 18t deliberately missing
         })
         local util = reload_util()
-        -- OSC 1337 reply doesn't match; CSI fallback shows ratio=1, so 1.
         assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("rejects sub-1 OSC 1337 scale values", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
+    it("ignores malformed responses and stays at 1", function()
         mock_tty_responses({
-            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;0.5\007" },
+            { match = "%[14t", reply = "\027[?6c" }, -- DA1 reply, not CSI 14t
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[18t", reply = "\027[8;32;64t" },
         })
         local util = reload_util()
         assert.equals(1, util.terminal_pixel_scale())
     end)
 
     it("queries only once and caches the result", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
-        local calls = 0
-        tty.query = function(_payload, _opts, cb)
-            if _payload:match("1337;ReportCellSize") then
-                calls = calls + 1
-                cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+        local calls14 = 0
+        tty.query = function(payload, _opts, cb)
+            if payload:match("%[14t") then
+                calls14 = calls14 + 1
+                cb("\027[4;1024;1024t")
+            elseif payload:match("%[16t") then
+                cb("\027[6;16;8t")
+            elseif payload:match("%[18t") then
+                cb("\027[8;32;64t")
             end
         end
         local util = reload_util()
         assert.equals(2, util.terminal_pixel_scale())
         assert.equals(2, util.terminal_pixel_scale())
         assert.equals(2, util.terminal_pixel_scale())
-        assert.equals(1, calls)
-    end)
-
-    it("iterm2_scale alias still works (back-compat)", function()
-        vim.env.TERM_PROGRAM = "iTerm.app"
-        mock_tty_responses({
-            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=24.0;12.0;2.0\007" },
-        })
-        local util = reload_util()
-        assert.equals(2, util.iterm2_scale())
+        assert.equals(1, calls14, "CSI 14t should be queried exactly once")
     end)
 end)
 

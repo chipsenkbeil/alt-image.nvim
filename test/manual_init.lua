@@ -227,8 +227,8 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
     -- Sixel-specific: the encoder multiplies opts.width/height × cell pixels
     -- by this factor before handing to magick / img2sixel. When the user
     -- hasn't set vim.g.alt_img.sixel_pixel_scale, the encoder auto-detects
-    -- from iTerm2's OSC 1337 ReportCellSize (= screen scale factor; 2 on
-    -- retina, 1 elsewhere; 1 on non-iTerm2 terminals).
+    -- by comparing CSI 14t/18t (window in pixels ÷ chars) against CSI 16t
+    -- (cell pixels) — same approach chafa uses to render correctly.
     table.insert(lines, string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale)))
     table.insert(lines, string.format("  terminal_pixel_scale (auto)     = %d×", util.terminal_pixel_scale()))
 

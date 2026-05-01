@@ -190,58 +190,18 @@ end
 -- pixels — so a sixel encoded at the cell pixel size renders at half
 -- the requested area on a 2x retina display. This value is the multiplier
 -- the sixel encoder applies on top of cell_pixel_size to compensate.
--- Default 1; populated via OSC 1337 ReportCellSize for iTerm2/WezTerm and
--- via CSI 14t/18t cross-check for everyone else (the same trick chafa uses).
+-- Detected via the CSI 14t (window in pixels) ÷ CSI 18t (window in chars)
+-- ÷ CSI 16t cross-check that chafa uses; supported by every modern
+-- terminal worth running images in.
 M._terminal_pixel_scale = 1
 M._terminal_pixel_scale_queried = false
 
--- Terminals known to implement iTerm2's `OSC 1337 ; ReportCellSize`,
--- which echoes back the screen scale factor as the third field. Other
--- terminals tend to ignore unrecognized OSC 1337 verbs, but a few echo
--- them as text — so we gate the send.
-local OSC_1337_REPORT_CELL_SIZE_TERMS = {
-    ["iTerm.app"] = true,
-    ["WezTerm"] = true,
-}
-
----Try iTerm2-style OSC 1337 ReportCellSize first. Returns true if the
----terminal answered with a parseable scale (and `M._terminal_pixel_scale`
----was updated).
----@private
----@return boolean
-function M._query_scale_osc1337()
-    if not OSC_1337_REPORT_CELL_SIZE_TERMS[vim.env.TERM_PROGRAM] then
-        return false
-    end
-    local timeout = 500
-    local done, ok = false, false
-    tty.query("\027]1337;ReportCellSize\007", { timeout = timeout }, function(resp)
-        -- Reply: ESC ] 1337 ; ReportCellSize=<h>;<w>;<scale> BEL  (or ST)
-        local _h, _w, scale = (resp or ""):match("ReportCellSize=([%d%.]+);([%d%.]+);([%d%.]+)")
-        if scale then
-            local n = tonumber(scale)
-            if n and n >= 1 then
-                M._terminal_pixel_scale = math.floor(n)
-                ok = true
-            end
-            done = true
-            return true
-        end
-        return false
-    end)
-    vim.wait(timeout + 100, function()
-        return done
-    end)
-    return ok
-end
-
----Generic fallback: CSI 14t reports window size in pixels, CSI 18t reports
----it in characters. The implied per-cell pixel size from those two should
----match CSI 16t's reported cell size on terminals that report consistently.
----When CSI 14t is reported in PHYSICAL pixels but CSI 16t/18t in LOGICAL
----(common on HiDPI for terminals that don't account for backing scale),
----the ratio reveals the scale factor. Returns true if a >1 scale was
----detected.
+---CSI 14t reports window size in pixels, CSI 18t reports it in characters.
+---The implied per-cell pixel size from those two should match CSI 16t's
+---reported cell size on terminals that report consistently. When CSI 14t
+---is reported in PHYSICAL pixels but CSI 16t/18t in LOGICAL (common on
+---HiDPI for terminals that don't account for backing scale), the ratio
+---reveals the scale factor. Returns true if a >1 scale was detected.
 ---@private
 ---@return boolean
 function M._query_scale_geometry_xtwinops()
@@ -311,23 +271,16 @@ function M._query_scale_geometry_xtwinops()
 end
 
 ---Return the cached terminal pixel scale factor (1, 2, …). Triggers a
----synchronous OSC 1337 ReportCellSize query on first call (iTerm2 /
----WezTerm), falling back to a CSI 14t/18t × 16t cross-check for other
----terminals. Caches until VimResized/UIEnter invalidates.
+---synchronous CSI 14t/18t × 16t cross-check on first call. Caches
+---until VimResized/UIEnter invalidates.
 ---@return integer
 function M.terminal_pixel_scale()
     if not M._terminal_pixel_scale_queried then
         M._terminal_pixel_scale_queried = true
-        if not M._query_scale_osc1337() then
-            M._query_scale_geometry_xtwinops()
-        end
+        M._query_scale_geometry_xtwinops()
     end
     return M._terminal_pixel_scale
 end
-
--- Backwards-compatible alias for older call-sites that named this iTerm2-
--- specific. New code should call `terminal_pixel_scale()`.
-M.iterm2_scale = M.terminal_pixel_scale
 
 -- Invalidate the cache on resize / UI re-attach. The augroup pattern
 -- with `clear = true` keeps reloads (tests, :Lazy reload) from stacking

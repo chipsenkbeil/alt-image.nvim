@@ -11,14 +11,17 @@
 --     sixel_pixel_scale  = nil,                       -- integer override; nil = auto
 --   }
 --
--- `sixel_pixel_scale` exists because iTerm2's sixel renderer treats sixel
--- pixels as PHYSICAL (retina) pixels — so a 32x64 sixel on a 2x display
--- shows up at 16x32 logical pixels, not the 4x4 cells the encoder asked
--- for. When unset (the default), the sixel encoder reads iTerm2's
--- OSC 1337 ReportCellSize to discover the screen scale factor and uses
--- that as the multiplier; on non-iTerm2 terminals the auto-detect returns
--- 1, matching the standard sixel semantics. Setting an integer here
--- forces a specific multiplier and skips the auto-detect.
+-- `sixel_pixel_scale` exists because iTerm2 (and a few others, e.g.
+-- WezTerm) report cell sizes in LOGICAL pixels via CSI 16t but render
+-- sixel at PHYSICAL pixels — so a 32x64 sixel on a 2x display shows up
+-- at 16x32 logical pixels, not the 4x4 cells the encoder asked for.
+-- When unset (the default), the sixel encoder discovers the scale by
+-- comparing CSI 14t (window pixels) ÷ CSI 18t (window characters)
+-- against CSI 16t (cell pixels): if the implied per-cell size is
+-- meaningfully larger than CSI 16t reports, the ratio is the scale.
+-- Same approach chafa uses; works on every modern terminal. Setting
+-- an integer here forces a specific multiplier and skips the auto-
+-- detect.
 --
 -- All fields are optional; missing fields fall back to the defaults below.
 -- Read happens at call-time (not require-time) so user config can be set
@@ -45,7 +48,8 @@ local DEFAULTS = {
     crop_cache_size = 64,
     -- sixel_pixel_scale is intentionally absent so callers can detect
     -- "user did not set this" (nil) and fall back to auto-detect via
-    -- util.iterm2_scale(). An explicit integer in vim.g.alt_img wins.
+    -- util.terminal_pixel_scale(). An explicit integer in vim.g.alt_img
+    -- wins.
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_img).
