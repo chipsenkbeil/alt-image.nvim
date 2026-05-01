@@ -701,7 +701,20 @@ local _libz_ok = pcall(function()
     int compress2(uint8_t *dest, alt_img_uLongf *destLen,
                   const uint8_t *source, alt_img_uLongf sourceLen, int level);
   ]])
-    local libz = ffi.load("z")
+    -- Try the conventional names across platforms. "z" picks up libz.so /
+    -- libz.dylib on Linux/macOS; "zlib1" / "zlib" / "libz" cover native
+    -- Windows installs (zlib1.dll) and odd packagings.
+    local libz
+    for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
+        local lok, lib = pcall(ffi.load, name)
+        if lok then
+            libz = lib
+            break
+        end
+    end
+    if not libz then
+        error("libz not loadable")
+    end
 
     libz_compress = function(data, level)
         local src_len = #data

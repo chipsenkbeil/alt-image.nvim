@@ -415,6 +415,115 @@ describe("encode_sixel_dispatch", function()
             error(err, 0)
         end
     end)
+
+    it("prefers magick raw-RGBA when libz is missing", function()
+        local senc, calls, restore = with_mocks({ img2sixel = true, magick = true }, function()
+            return { code = 0, stdout = "RGBA_FAST_PATH" }
+        end, { img2sixel = "img2sixel", magick = "magick" })
+        -- Stub libz absence so the new short-circuit fires regardless of host.
+        require("alt-img._core.png").has_libz = function()
+            return false
+        end
+        local ok, err = pcall(function()
+            local out = senc.encode_sixel_dispatch(rgba, 1, 1)
+            assert.equals("RGBA_FAST_PATH", out)
+            -- Single magick call with -size/-depth/RGBA:- args; img2sixel is skipped.
+            assert.equals(1, #calls)
+            local cmd = calls[1].cmd
+            assert.equals("magick", cmd[1])
+            local saw_rgba_input = false
+            for _, a in ipairs(cmd) do
+                if a == "RGBA:-" then
+                    saw_rgba_input = true
+                end
+            end
+            assert.is_true(saw_rgba_input, "expected magick to read RGBA:- from stdin")
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("falls through to PNG paths when raw-RGBA magick fails (no libz)", function()
+        local senc, calls, restore = with_mocks({ img2sixel = true, magick = true }, function(cmd)
+            -- First call: magick raw-RGBA (has RGBA:- arg) -> fail.
+            for _, a in ipairs(cmd) do
+                if a == "RGBA:-" then
+                    return { code = 1, stdout = "" }
+                end
+            end
+            -- Subsequent calls: img2sixel or magick from PNG -> succeed.
+            if cmd[1] == "img2sixel" then
+                return { code = 0, stdout = "PNG_LIBSIXEL" }
+            end
+            return { code = 0, stdout = "PNG_MAGICK" }
+        end, { img2sixel = "img2sixel", magick = "magick" })
+        require("alt-img._core.png").has_libz = function()
+            return false
+        end
+        local ok, err = pcall(function()
+            local out = senc.encode_sixel_dispatch(rgba, 1, 1)
+            -- Raw-RGBA magick failed, then img2sixel succeeds with the PNG hop.
+            assert.equals("PNG_LIBSIXEL", out)
+            assert.equals(2, #calls)
+            assert.equals("magick", calls[1].cmd[1])
+            assert.equals("img2sixel", calls[2].cmd[1])
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+end)
+
+describe("magick.encode_sixel_from_rgba", function()
+    -- One pixel of RGBA so the buffer length is meaningful in assertions.
+    local rgba = string.char(255, 0, 0, 255)
+
+    it("invokes magick with -size/-depth/RGBA:- when configured", function()
+        local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
+            return { code = 0, stdout = "RGBA_SIXEL" }
+        end, { img2sixel = false, magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            local out = magick.encode_sixel_from_rgba(rgba, 1, 1)
+            assert.equals("RGBA_SIXEL", out)
+            assert.equals(1, #calls)
+            local cmd = calls[1].cmd
+            assert.equals("magick", cmd[1])
+            -- The geometry, depth and raw-input identifiers must all be present.
+            local seen = {}
+            for i, a in ipairs(cmd) do
+                seen[a] = i
+            end
+            assert.is_true(seen["-size"] ~= nil, "expected -size flag")
+            assert.equals("1x1", cmd[seen["-size"] + 1])
+            assert.is_true(seen["-depth"] ~= nil, "expected -depth flag")
+            assert.equals("8", cmd[seen["-depth"] + 1])
+            assert.is_true(seen["RGBA:-"] ~= nil, "expected RGBA:- input")
+            -- stdin must be the raw RGBA buffer, not a PNG.
+            assert.equals(rgba, calls[1].opts.stdin)
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("returns nil when magick = false", function()
+        local _, _, restore = with_mocks({ img2sixel = true, magick = true }, function()
+            return { code = 0, stdout = "NEVER" }
+        end, { img2sixel = false, magick = false })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.is_nil(magick.encode_sixel_from_rgba(rgba, 1, 1))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
 end)
 
 describe("magick.crop_to_sixel", function()

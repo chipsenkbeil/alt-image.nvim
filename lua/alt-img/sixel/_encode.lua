@@ -381,13 +381,24 @@ M.encode_sixel = _encode_sixel
 function M.encode_sixel_dispatch(rgba, w_px, h_px)
     local magick = require("alt-img._core.magick")
     local libsixel = require("alt-img.sixel._libsixel")
+    local png = require("alt-img._core.png")
     local has_libsixel = libsixel.binary() ~= nil
     local has_magick = magick.binary() ~= nil
+
+    -- Without libz, png.encode emits uncompressed stored-block PNGs (~raw
+    -- RGBA size). The PNG hop then dominates the pipeline. magick can read
+    -- raw RGBA directly via `-size WxH -depth 8 RGBA:-`, so prefer that
+    -- when we can. img2sixel doesn't have an equivalent raw-input mode.
+    if has_magick and not png.has_libz() then
+        local out = magick.encode_sixel_from_rgba(rgba, w_px, h_px)
+        if out and #out > 0 then
+            return out
+        end
+    end
 
     -- Both external tools want PNG on stdin; encode once and try each in turn.
     local png_bytes
     if has_libsixel or has_magick then
-        local png = require("alt-img._core.png")
         png_bytes = png.encode(rgba, w_px, h_px)
     end
     if has_libsixel and png_bytes then

@@ -60,7 +60,12 @@ local function tooling(h)
     if png.has_libz() then
         h.ok("PNG encoder: libz DEFLATE compression active")
     else
-        h.info("PNG encoder: libz not found, falling back to stored zlib blocks")
+        h.info(
+            "PNG encoder: libz not found, falling back to stored zlib blocks. "
+                .. "When ImageMagick is available the sixel encoder sends raw RGBA "
+                .. "to `magick` to skip the PNG hop. Install zlib (Windows: ensure "
+                .. "zlib1.dll is on PATH) for the compressed-PNG path."
+        )
     end
 end
 

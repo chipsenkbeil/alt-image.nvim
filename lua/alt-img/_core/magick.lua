@@ -84,4 +84,23 @@ function M.encode_sixel_from_png(png_bytes, colors)
     return run({ bin, "-", "-define", def, "sixel:-" }, png_bytes)
 end
 
+---Encode a raw RGBA pixel buffer as a sixel DCS string. Returns nil on failure.
+---Skips the PNG encode/decode hop — the PNG path is dominated by encoder cost
+---when libz is unavailable (the encoder falls back to uncompressed stored
+---blocks), which is precisely when this entry point is preferable.
+---@param rgba string raw 8-bit RGBA bytes (length == w_px * h_px * 4)
+---@param w_px integer
+---@param h_px integer
+---@param colors integer? max palette size (default 256)
+---@return string?
+function M.encode_sixel_from_rgba(rgba, w_px, h_px, colors)
+    local bin = M.binary()
+    if not bin then
+        return nil
+    end
+    local size = string.format("%dx%d", w_px, h_px)
+    local def = "sixel:colors=" .. tostring(colors or 256)
+    return run({ bin, "-size", size, "-depth", "8", "RGBA:-", "-define", def, "sixel:-" }, rgba)
+end
+
 return M
