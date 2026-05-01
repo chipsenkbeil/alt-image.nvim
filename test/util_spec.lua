@@ -210,6 +210,7 @@ end)
 describe("_core.util terminal_pixel_scale", function()
     local tty = require("alt-img._core.tty")
     local saved_query = tty.query
+    local saved_term_program = vim.env.TERM_PROGRAM
 
     local function reload_util()
         package.loaded["alt-img._core.util"] = nil
@@ -233,29 +234,69 @@ describe("_core.util terminal_pixel_scale", function()
 
     after_each(function()
         tty.query = saved_query
+        vim.env.TERM_PROGRAM = saved_term_program
     end)
 
-    it("infers scale=2 when CSI 14t reports physical pixels and CSI 16t stays logical", function()
-        -- Scenario: 64 cols × 32 rows window with 8×16 cells. Logical
-        -- window = 512×512; on a 2× HiDPI display the terminal reports
-        -- CSI 14t in physical pixels (1024×1024) while CSI 16t stays
-        -- logical (8×16). The implied per-cell pixel size from 14t/18t
-        -- is 16×32 — exactly 2× CSI 16t — so we infer scale=2.
+    it("OSC 1337 wins when iTerm2/WezTerm reports a scale", function()
+        vim.env.TERM_PROGRAM = "WezTerm"
         mock_tty_responses({
-            -- CSI 16t reply format: ESC [ 6 ; <h> ; <w> t
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=20.0;10.0;2.0\007" },
+            -- Geometry signals consistency (no scale) — but OSC 1337 fires.
             { match = "%[16t", reply = "\027[6;16;8t" },
-            -- CSI 14t reply format: ESC [ 4 ; <h> ; <w> t — PHYSICAL pixels
-            { match = "%[14t", reply = "\027[4;1024;1024t" },
-            -- CSI 18t reply format: ESC [ 8 ; <rows> ; <cols> t
+            { match = "%[14t", reply = "\027[4;512;512t" },
             { match = "%[18t", reply = "\027[8;32;64t" },
         })
         local util = reload_util()
         assert.equals(2, util.terminal_pixel_scale())
+        local osc, geom = util.terminal_pixel_scale_sources()
+        assert.equals(2, osc)
+        assert.equals(0, geom)
     end)
 
-    it("returns 1 when window pixels and cells agree", function()
-        -- Same window geometry but CSI 14t reports LOGICAL (512×512).
-        -- Implied cell size = CSI 16t = no scaling.
+    it("geometry wins when OSC 1337 isn't applicable on this terminal", function()
+        vim.env.TERM_PROGRAM = "foot"
+        mock_tty_responses({
+            -- OSC 1337 deliberately missing from gate; never sent.
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[14t", reply = "\027[4;1024;1024t" },
+            { match = "%[18t", reply = "\027[8;32;64t" },
+        })
+        local util = reload_util()
+        assert.equals(2, util.terminal_pixel_scale())
+        local osc, geom = util.terminal_pixel_scale_sources()
+        assert.equals(0, osc)
+        assert.equals(2, geom)
+    end)
+
+    it("takes the max when both signals fire", function()
+        vim.env.TERM_PROGRAM = "WezTerm"
+        mock_tty_responses({
+            { match = "1337;ReportCellSize", reply = "\027]1337;ReportCellSize=20.0;10.0;2.0\007" },
+            { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[14t", reply = "\027[4;1536;1536t" }, -- implies 3× (1536/64 cols = 24 = 3×8)
+            { match = "%[18t", reply = "\027[8;32;64t" },
+        })
+        local util = reload_util()
+        assert.equals(3, util.terminal_pixel_scale())
+        local osc, geom = util.terminal_pixel_scale_sources()
+        assert.equals(2, osc)
+        assert.equals(3, geom)
+    end)
+
+    it("returns 1 when both signals are silent", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        tty.query = function(_payload, _opts, _cb)
+            -- never responds
+        end
+        local util = reload_util()
+        assert.equals(1, util.terminal_pixel_scale())
+        local osc, geom = util.terminal_pixel_scale_sources()
+        assert.equals(0, osc)
+        assert.equals(0, geom)
+    end)
+
+    it("returns 1 when geometry agrees and OSC 1337 isn't applicable", function()
+        vim.env.TERM_PROGRAM = "foot"
         mock_tty_responses({
             { match = "%[16t", reply = "\027[6;16;8t" },
             { match = "%[14t", reply = "\027[4;512;512t" },
@@ -265,28 +306,31 @@ describe("_core.util terminal_pixel_scale", function()
         assert.equals(1, util.terminal_pixel_scale())
     end)
 
-    it("returns 1 when CSI queries don't respond at all", function()
-        tty.query = function(_payload, _opts, _cb)
-            -- never responds
+    it("does not send OSC 1337 to terminals not in the gate", function()
+        vim.env.TERM_PROGRAM = "foot"
+        local saw_osc1337 = false
+        tty.query = function(payload, _opts, cb)
+            if payload:match("1337;ReportCellSize") then
+                saw_osc1337 = true
+            elseif payload:match("%[16t") then
+                cb("\027[6;16;8t")
+            elseif payload:match("%[14t") then
+                cb("\027[4;512;512t")
+            elseif payload:match("%[18t") then
+                cb("\027[8;32;64t")
+            end
         end
         local util = reload_util()
-        assert.equals(1, util.terminal_pixel_scale())
-    end)
-
-    it("returns 1 when CSI 14t responds but CSI 18t doesn't", function()
-        mock_tty_responses({
-            { match = "%[16t", reply = "\027[6;16;8t" },
-            { match = "%[14t", reply = "\027[4;1024;1024t" },
-            -- 18t deliberately missing
-        })
-        local util = reload_util()
-        assert.equals(1, util.terminal_pixel_scale())
+        util.terminal_pixel_scale()
+        assert.is_false(saw_osc1337)
     end)
 
     it("ignores malformed responses and stays at 1", function()
+        vim.env.TERM_PROGRAM = "iTerm.app"
         mock_tty_responses({
-            { match = "%[14t", reply = "\027[?6c" }, -- DA1 reply, not CSI 14t
+            { match = "1337;ReportCellSize", reply = "\027[?6c" }, -- DA1 reply, not OSC 1337
             { match = "%[16t", reply = "\027[6;16;8t" },
+            { match = "%[14t", reply = "\027[4;512;512t" },
             { match = "%[18t", reply = "\027[8;32;64t" },
         })
         local util = reload_util()
@@ -294,11 +338,15 @@ describe("_core.util terminal_pixel_scale", function()
     end)
 
     it("queries only once and caches the result", function()
-        local calls14 = 0
+        vim.env.TERM_PROGRAM = "iTerm.app"
+        local calls = { osc = 0, csi14 = 0 }
         tty.query = function(payload, _opts, cb)
-            if payload:match("%[14t") then
-                calls14 = calls14 + 1
-                cb("\027[4;1024;1024t")
+            if payload:match("1337;ReportCellSize") then
+                calls.osc = calls.osc + 1
+                cb("\027]1337;ReportCellSize=24.0;12.0;2.0\007")
+            elseif payload:match("%[14t") then
+                calls.csi14 = calls.csi14 + 1
+                cb("\027[4;512;512t")
             elseif payload:match("%[16t") then
                 cb("\027[6;16;8t")
             elseif payload:match("%[18t") then
@@ -309,7 +357,8 @@ describe("_core.util terminal_pixel_scale", function()
         assert.equals(2, util.terminal_pixel_scale())
         assert.equals(2, util.terminal_pixel_scale())
         assert.equals(2, util.terminal_pixel_scale())
-        assert.equals(1, calls14, "CSI 14t should be queried exactly once")
+        assert.equals(1, calls.osc)
+        assert.equals(1, calls.csi14)
     end)
 end)
 

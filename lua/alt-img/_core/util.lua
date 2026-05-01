@@ -188,35 +188,73 @@ end
 -- Sixel pixel-scale tracking. Some terminals (iTerm2, WezTerm, …) report
 -- cell sizes in LOGICAL pixels via CSI 16t but render sixel at PHYSICAL
 -- pixels — so a sixel encoded at the cell pixel size renders at half
--- the requested area on a 2x retina display. This value is the multiplier
--- the sixel encoder applies on top of cell_pixel_size to compensate.
--- Detected via the CSI 14t (window in pixels) ÷ CSI 18t (window in chars)
--- ÷ CSI 16t cross-check that chafa uses; supported by every modern
--- terminal worth running images in.
+-- the requested area on a 2x retina display. We derive a scale factor
+-- two ways and take the larger:
+--
+--   1. OSC 1337 ; ReportCellSize  — iTerm2/WezTerm reply with the screen
+--      scale factor as the third field. Definitive when the terminal
+--      supports it.
+--   2. CSI 14t / CSI 18t / CSI 16t — same trick chafa uses. When CSI 14t
+--      is reported in PHYSICAL pixels but CSI 16t in LOGICAL (foot,
+--      mlterm on HiDPI X11/Wayland), the ratio reveals the scale.
+--      Stays at 1 on terminals that report consistently — including
+--      iTerm2/WezTerm, which is why we need (1) for them.
 M._terminal_pixel_scale = 1
 M._terminal_pixel_scale_queried = false
+-- Per-source scale values for diagnostic surface. Either may be 0 to
+-- mean "no answer / not applicable on this terminal".
+M._scale_from_osc1337 = 0
+M._scale_from_geometry = 0
 
----CSI 14t reports window size in pixels, CSI 18t reports it in characters.
----The implied per-cell pixel size from those two should match CSI 16t's
----reported cell size on terminals that report consistently. When CSI 14t
----is reported in PHYSICAL pixels but CSI 16t/18t in LOGICAL (common on
----HiDPI for terminals that don't account for backing scale), the ratio
----reveals the scale factor. Returns true if a >1 scale was detected.
+local OSC_1337_REPORT_CELL_SIZE_TERMS = {
+    ["iTerm.app"] = true,
+    ["WezTerm"] = true,
+}
+
 ---@private
----@return boolean
+---@return integer scale 0 if not applicable / no answer; otherwise >= 1
+function M._query_scale_osc1337()
+    if not OSC_1337_REPORT_CELL_SIZE_TERMS[vim.env.TERM_PROGRAM] then
+        return 0
+    end
+    local timeout = 500
+    local found = 0
+    local done = false
+    tty.query("\027]1337;ReportCellSize\007", { timeout = timeout }, function(resp)
+        local _h, _w, scale = (resp or ""):match("ReportCellSize=([%d%.]+);([%d%.]+);([%d%.]+)")
+        if scale then
+            local n = tonumber(scale)
+            if n and n >= 1 then
+                found = math.floor(n)
+            end
+            done = true
+            return true
+        end
+        return false
+    end)
+    vim.wait(timeout + 100, function()
+        return done
+    end)
+    return found
+end
+
+---CSI 14t (window in pixels) ÷ CSI 18t (window in chars) ÷ CSI 16t (cell
+---pixels). When the terminal reports CSI 14t physical and CSI 16t logical,
+---the ratio is the scale. When everything agrees, returns 0 (no scale
+---required from this signal).
+---@private
+---@return integer scale 0 if no signal; otherwise >= 1
 function M._query_scale_geometry_xtwinops()
-    -- Need cell_pixel_size to compare against; trigger a query if cold.
     M.query_cell_size()
     local cell_w, cell_h = M.cell_pixel_size()
     if not cell_w or cell_w <= 0 or cell_h <= 0 then
-        return false
+        return 0
     end
 
     local timeout = 300
     local win_w, win_h, cols, rows
     local done14, done18 = false, false
 
-    -- CSI 14t — `\e[4;<h>;<w>t` (window in pixels).
     tty.query("\027[14t", { timeout = timeout }, function(resp)
         local h, w = (resp or ""):match("^\027%[4;(%d+);(%d+)t$")
         if h and w then
@@ -229,12 +267,10 @@ function M._query_scale_geometry_xtwinops()
     vim.wait(timeout + 50, function()
         return done14
     end)
-
     if not (win_w and win_h) then
-        return false
+        return 0
     end
 
-    -- CSI 18t — `\e[8;<rows>;<cols>t` (window in characters).
     tty.query("\027[18t", { timeout = timeout }, function(resp)
         local r, c = (resp or ""):match("^\027%[8;(%d+);(%d+)t$")
         if r and c then
@@ -247,39 +283,42 @@ function M._query_scale_geometry_xtwinops()
     vim.wait(timeout + 50, function()
         return done18
     end)
-
     if not (cols and rows and cols > 0 and rows > 0) then
-        return false
+        return 0
     end
 
-    -- If the window-derived cell size is meaningfully larger than CSI 16t's,
-    -- the terminal is reporting CSI 16t logically while CSI 14t in physical
-    -- pixels — exactly the retina-mismatch case. Round to the nearest
-    -- integer (typical values are 1 or 2; allow 3 for >2x setups).
     local derived_w = win_w / cols
     local derived_h = win_h / rows
-    local ratio_w = derived_w / cell_w
-    local ratio_h = derived_h / cell_h
-    -- Use the smaller of the two so a fractional padding row/column doesn't
-    -- inflate the result. Both should match in practice on a clean window.
-    local ratio = math.min(ratio_w, ratio_h)
+    local ratio = math.min(derived_w / cell_w, derived_h / cell_h)
     if ratio >= 1.5 then
-        M._terminal_pixel_scale = math.max(1, math.floor(ratio + 0.5))
-        return true
+        return math.max(1, math.floor(ratio + 0.5))
     end
-    return false
+    return 0
 end
 
----Return the cached terminal pixel scale factor (1, 2, …). Triggers a
----synchronous CSI 14t/18t × 16t cross-check on first call. Caches
----until VimResized/UIEnter invalidates.
+---Return the cached terminal pixel scale factor (1, 2, …). Combines
+---OSC 1337 ReportCellSize (iTerm2/WezTerm) and CSI 14t/18t × 16t
+---geometry; takes the larger. Caches until VimResized/UIEnter invalidates.
 ---@return integer
 function M.terminal_pixel_scale()
     if not M._terminal_pixel_scale_queried then
         M._terminal_pixel_scale_queried = true
-        M._query_scale_geometry_xtwinops()
+        M._scale_from_osc1337 = M._query_scale_osc1337()
+        M._scale_from_geometry = M._query_scale_geometry_xtwinops()
+        local best = math.max(M._scale_from_osc1337, M._scale_from_geometry, 1)
+        M._terminal_pixel_scale = best
     end
     return M._terminal_pixel_scale
+end
+
+---Return the per-source scale values (for diagnostic surface). Each is
+---0 when the source did not contribute a usable scale.
+---@return integer osc1337 0 = not applicable / no answer
+---@return integer geometry 0 = no signal
+function M.terminal_pixel_scale_sources()
+    -- Drive a query if it hasn't fired yet so this returns meaningful values.
+    M.terminal_pixel_scale()
+    return M._scale_from_osc1337, M._scale_from_geometry
 end
 
 -- Invalidate the cache on resize / UI re-attach. The augroup pattern

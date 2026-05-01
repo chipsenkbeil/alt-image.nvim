@@ -225,12 +225,29 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
         )
     )
     -- Sixel-specific: the encoder multiplies opts.width/height × cell pixels
-    -- by this factor before handing to magick / img2sixel. When the user
-    -- hasn't set vim.g.alt_img.sixel_pixel_scale, the encoder auto-detects
-    -- by comparing CSI 14t/18t (window in pixels ÷ chars) against CSI 16t
-    -- (cell pixels) — same approach chafa uses to render correctly.
+    -- by this factor before handing to magick / img2sixel. The encoder
+    -- combines two auto-detect signals (taking the larger) when the user
+    -- hasn't set vim.g.alt_img.sixel_pixel_scale:
+    --   1. OSC 1337 ; ReportCellSize — iTerm2/WezTerm only.
+    --   2. CSI 14t/18t ÷ CSI 16t      — chafa's geometry trick.
+    -- Both are shown below so it's obvious which one (if any) fired and
+    -- whether they agree.
+    local osc, geom = util.terminal_pixel_scale_sources()
+    local final_auto = util.terminal_pixel_scale()
+    local effective = (type(g.sixel_pixel_scale) == "number" and g.sixel_pixel_scale >= 1)
+            and math.floor(g.sixel_pixel_scale)
+        or final_auto
     table.insert(lines, string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale)))
-    table.insert(lines, string.format("  terminal_pixel_scale (auto)     = %d×", util.terminal_pixel_scale()))
+    table.insert(
+        lines,
+        string.format("  scale via OSC 1337              = %s", osc > 0 and (osc .. "×") or "no answer")
+    )
+    table.insert(
+        lines,
+        string.format("  scale via CSI 14t/18t/16t       = %s", geom > 0 and (geom .. "×") or "no signal")
+    )
+    table.insert(lines, string.format("  scale chosen by auto-detect     = %d×", final_auto))
+    table.insert(lines, string.format("  scale actually used (effective) = %d×", effective))
 
     -- Active placements per provider, with their resolved opts (post-derive_dims).
     -- Useful when the displayed image looks wrong-sized — opts.width/height
