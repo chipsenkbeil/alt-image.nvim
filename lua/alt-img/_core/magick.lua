@@ -123,6 +123,25 @@ function M.encode_sixel_from_png_resized(png_bytes, w_px, h_px, colors)
     return run({ bin, "-", "-sample", geom, "-define", def, "sixel:-" }, png_bytes)
 end
 
+---Decode + nearest-neighbor resize + PNG re-encode in one magick subprocess.
+---Mirrors `encode_sixel_from_png_resized` for the iTerm2 OSC 1337 payload:
+---one process does decode + sample-resize + PNG output, so the pure-Lua
+---decoder/resizer/encoder are bypassed. `-sample` (not `-resize`) keeps
+---the output byte-identical in shape to the pure-Lua nearest-neighbor
+---path so iTerm2 sees a 1:1 cell-pixel mapping (sharp output).
+---@param png_bytes string original PNG bytes
+---@param w_px integer target width in pixels
+---@param h_px integer target height in pixels
+---@return string?
+function M.encode_png_resized(png_bytes, w_px, h_px)
+    local bin = M.binary()
+    if not bin then
+        return nil
+    end
+    local geom = string.format("%dx%d!", w_px, h_px)
+    return run({ bin, "-", "-sample", geom, "png:-" }, png_bytes)
+end
+
 ---Decode + resize-to-target + crop-of-target + sixel-encode in one magick
 ---subprocess. The crop coordinates are in *target* pixel space (after the
 ---resize), matching the providers' carrier math which works in cell-pixel

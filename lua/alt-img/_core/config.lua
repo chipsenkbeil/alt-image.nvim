@@ -5,8 +5,9 @@
 -- via the global table:
 --
 --   vim.g.alt_img = {
---     magick    = { 'magick', 'convert' },   -- string | string[] | false
---     img2sixel = 'img2sixel',               -- string | string[] | false
+--     magick           = { 'magick', 'convert' },   -- string | string[] | false
+--     img2sixel        = 'img2sixel',               -- string | string[] | false
+--     crop_cache_size  = 64,                        -- integer (LRU max per placement)
 --   }
 --
 -- All fields are optional; missing fields fall back to the defaults below.
@@ -22,6 +23,7 @@
 ---@class altimg.Config
 ---@field magick? string|string[]|false
 ---@field img2sixel? string|string[]|false
+---@field crop_cache_size? integer
 
 local M = {}
 
@@ -29,6 +31,7 @@ local M = {}
 local DEFAULTS = {
     magick = { "magick", "convert" },
     img2sixel = { "img2sixel" },
+    crop_cache_size = 64,
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_img).

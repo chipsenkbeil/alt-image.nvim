@@ -4,7 +4,10 @@
 
 local M = {}
 
-M.MAX_DEFAULT = 16
+-- Crop caches store one PNG / sixel string per visible-window-rect key.
+-- 64 covers a long-buffer scroll without thrashing; each entry is typically
+-- well under 100KB so worst-case memory per placement is bounded by ~6MB.
+M.MAX_DEFAULT = 64
 
 function M.get(map, order, key)
     if not map then

@@ -17,6 +17,7 @@ local magick = require("alt-img._core.magick")
 local senc = require("alt-img.sixel._encode")
 local render = require("alt-img._core.render")
 local lru = require("alt-img._core.lru")
+local _config = require("alt-img._core.config")
 
 local M = {}
 
@@ -162,7 +163,7 @@ end
 local function crop_cache_put(s, key, value)
     s.sixel_cache_by_src = s.sixel_cache_by_src or {}
     s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
-    lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value)
+    lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value, _config.read().crop_cache_size)
 end
 
 -- Public so _render can call us. Reads state[id], emits sixel DCS at screen_pos.
@@ -293,7 +294,13 @@ function M.set(data_or_id, opts)
     local opts_canonical = canonicalize(opts)
     -- If non-ui and dims missing, derive from the PNG IHDR.
     derive_dims(data_or_id, opts_canonical)
-    state[id] = { data = data_or_id, opts = opts_canonical, id = id, sixel_cache_by_src = {} }
+    state[id] = {
+        data = data_or_id,
+        opts = opts_canonical,
+        id = id,
+        sixel_cache_by_src = {},
+        sixel_cache_by_src_order = {},
+    }
 
     if state[id].opts.relative ~= "ui" then
         require("alt-img._core.carrier").register(M, id, state[id].opts)

@@ -48,7 +48,12 @@ describe("alt-img._core.render", function()
         assert.equals(1, emitted)
     end)
 
-    it("invalidate marks the placement dirty for the next flush", function()
+    it("invalidate without movement does not re-emit", function()
+        -- Re-pushing the entire sixel/OSC payload on every CursorMoved
+        -- /TextChanged when the placement hasn't actually moved is the
+        -- dominant per-keystroke cost. The render loop should clear the
+        -- dirty flag and skip emission when the resolved positions match
+        -- last_positions.
         local emitted = 0
         local fake = {
             _emit_at = function()
@@ -58,8 +63,31 @@ describe("alt-img._core.render", function()
         render.register(fake, 1, function()
             return pos(1, 1)
         end)
+        render.flush() -- initial paint
+        assert.equals(1, emitted)
+        render.invalidate(fake, 1)
+        render.flush()
+        assert.equals(1, emitted) -- no re-emit, position unchanged
+        -- A second invalidate also does not re-emit.
+        render.invalidate(fake, 1)
         render.flush()
         assert.equals(1, emitted)
+    end)
+
+    it("invalidate followed by a movement re-emits", function()
+        local emitted = 0
+        local p = pos(1, 1)
+        local fake = {
+            _emit_at = function()
+                emitted = emitted + 1
+            end,
+        }
+        render.register(fake, 1, function()
+            return p
+        end)
+        render.flush()
+        assert.equals(1, emitted)
+        p = pos(5, 5)
         render.invalidate(fake, 1)
         render.flush()
         assert.equals(2, emitted)
@@ -91,7 +119,7 @@ describe("alt-img._core.render", function()
         assert.matches("\027%[%?2026h", H.captured())
     end)
 
-    it("invalidate of one placement re-emits only that placement (no clear)", function()
+    it("invalidate of one placement without movement does not disturb peers", function()
         local emitted = { [1] = 0, [2] = 0, [3] = 0 }
         local fake = {
             _emit_at = function(id, _p)
@@ -111,11 +139,11 @@ describe("alt-img._core.render", function()
         assert.equals(1, emitted[1])
         assert.equals(1, emitted[2])
         assert.equals(1, emitted[3])
-        -- Mark only id 1 dirty. With same position, no clear is triggered;
-        -- only the dirty placement should re-emit.
+        -- Mark only id 1 dirty. Same position -> no movement, no clear, no
+        -- re-emit anywhere.
         render.invalidate(fake, 1)
         render.flush()
-        assert.equals(2, emitted[1])
+        assert.equals(1, emitted[1])
         assert.equals(1, emitted[2])
         assert.equals(1, emitted[3])
     end)

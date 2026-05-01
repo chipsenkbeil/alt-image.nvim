@@ -687,6 +687,56 @@ describe("magick.crop_resized_to_sixel", function()
     end)
 end)
 
+describe("magick.encode_png_resized", function()
+    local png_bytes = "FAKEPNG"
+
+    it("invokes magick with -sample WxH! ending in png:- when configured", function()
+        local _, calls, restore = with_mocks({ img2sixel = false, magick = true }, function()
+            return { code = 0, stdout = "RESIZED_PNG" }
+        end, { img2sixel = false, magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            local out = magick.encode_png_resized(png_bytes, 80, 24)
+            assert.equals("RESIZED_PNG", out)
+            assert.equals(1, #calls)
+            local cmd = calls[1].cmd
+            assert.equals("magick", cmd[1])
+            local found = false
+            for i = 1, #cmd - 1 do
+                if cmd[i] == "-sample" and cmd[i + 1] == "80x24!" then
+                    found = true
+                end
+            end
+            assert.is_true(found, "expected -sample 80x24! in arg list")
+            -- Must be nearest-neighbor (-sample), not Lanczos (-resize), so
+            -- the output matches the pure-Lua nearest-neighbor resize.
+            for _, a in ipairs(cmd) do
+                assert.is_true(a ~= "-resize", "must not use -resize (smoothing filter)")
+            end
+            assert.equals("png:-", cmd[#cmd])
+            assert.equals(png_bytes, calls[1].opts.stdin)
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("returns nil when magick = false", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = "NEVER" }
+        end, { magick = false })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.is_nil(magick.encode_png_resized(png_bytes, 1, 1))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+end)
+
 describe("magick.crop_to_png", function()
     local png_bytes = "FAKEPNG"
 

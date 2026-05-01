@@ -10,6 +10,7 @@ local png = require("alt-img._core.png")
 local image = require("alt-img._core.image")
 local magick = require("alt-img._core.magick")
 local lru = require("alt-img._core.lru")
+local _config = require("alt-img._core.config")
 
 local M = {}
 
@@ -103,11 +104,26 @@ end
 ---exactly, so its built-in scaling becomes a no-op. The base64 cache avoids
 ---paying `vim.base64.encode` on every emit (non-trivial for large images
 ---under mouse-follow).
+---
+---When `magick` is on PATH and dims are known, route the full pipeline through
+---one subprocess (`magick - -sample WxH! png:-`) so the pure-Lua decoder /
+---resizer / encoder are bypassed. Symmetric to the sixel provider's magick
+---fast path in sixel.lua.
 ---@param s table placement state
 ---@return string png_bytes, string b64
 local function ensure_full_png(s)
     if s.full_png and s.full_png_b64 then
         return s.full_png, s.full_png_b64
+    end
+    util.query_cell_size()
+    if magick.binary() and s.opts.width and s.opts.height then
+        local cw, ch = util.cell_pixel_size()
+        local out = magick.encode_png_resized(s.data, s.opts.width * cw, s.opts.height * ch)
+        if out and #out > 0 then
+            s.full_png = out
+            s.full_png_b64 = vim.base64.encode(out)
+            return s.full_png, s.full_png_b64
+        end
     end
     local rgba, w, h = ensure_resized(s)
     s.full_png = png.encode(rgba, w, h)
@@ -151,7 +167,7 @@ end
 local function crop_cache_put(s, key, value)
     s.png_cache_by_src = s.png_cache_by_src or {}
     s.png_cache_by_src_order = s.png_cache_by_src_order or {}
-    lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, value)
+    lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, value, _config.read().crop_cache_size)
 end
 
 -- Public so _render can call us. Reads state[id], emits OSC 1337 at screen_pos.

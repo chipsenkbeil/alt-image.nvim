@@ -80,16 +80,28 @@ local function tick()
     end
 
     -- Snapshot dirty placements; detect movement.
+    --
+    -- A placement that is dirty but whose resolved positions are identical
+    -- to last tick's gets its dirty flag cleared without entering
+    -- `initially_dirty`. Re-pushing many KB of sixel/OSC bytes on every
+    -- CursorMoved/TextChanged is the dominant per-keystroke cost during
+    -- typing, and the terminal cells haven't been touched if the position
+    -- and dims didn't change. If something else in this tick triggers
+    -- `need_clear` (a peer placement moved, an unregister landed), the
+    -- registry-expand branch below pulls every placement back in, so a
+    -- genuine framebuffer wipe still gets covered.
     local need_clear = clear_pending
     local initially_dirty = {}
     for _, p in pairs(placements) do
         if p.redraw then
             local positions = p.get_pos() or {}
+            p.next_positions = positions
             if not positions_equal(positions, p.last_positions) then
                 need_clear = true
+                initially_dirty[#initially_dirty + 1] = p
+            else
+                p.redraw = false
             end
-            p.next_positions = positions
-            initially_dirty[#initially_dirty + 1] = p
         end
     end
 
@@ -194,7 +206,11 @@ end
 -- Timer + autocmds -----------------------------------------------------
 
 -- One module-level timer drives the dirty-flag scan. Set up only if we have
--- a usable vim.uv.new_timer (we do in normal Neovim).
+-- a usable vim.uv.new_timer (we do in normal Neovim). Exposed as M._timer
+-- so the benchmark harness (test/benchmark.lua) can stop it; otherwise
+-- `vim.system():wait()` yields the event loop and lets the timer's tick
+-- spawn extra subprocesses inside the benchmark's timing window, polluting
+-- `subprocess_count` measurements.
 local timer = vim.uv.new_timer()
 if timer then
     timer:start(
@@ -205,6 +221,7 @@ if timer then
         end)
     )
 end
+M._timer = timer
 
 local AUGROUP = vim.api.nvim_create_augroup("alt-img.render", { clear = true })
 
