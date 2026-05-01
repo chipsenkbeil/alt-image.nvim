@@ -14,7 +14,7 @@ function M.check()
                  .. '(Windows Terminal, iTerm.app, WezTerm, foot, mlterm, '
                  .. 'contour, xterm with +sixel build), '
                  .. 'or set TERM=xterm-sixel, or set '
-                 .. 'vim.g.alt_image = { protocol = "sixel" } to force.'))
+                 .. 'or set vim.ui.img = require("alt-image.sixel") to force.'))
   end
 
   if vim.env.TERM_PROGRAM == 'Apple_Terminal' then

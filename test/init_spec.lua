@@ -31,22 +31,6 @@ describe('alt-image init', function()
     end)
   end)
 
-  it('vim.g.alt_image.protocol overrides autodetect', function()
-    H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
-      vim.g.alt_image = { protocol = 'sixel' }
-      local m = require('alt-image')
-      assert.equals(require('alt-image.sixel'), m._provider())
-    end)
-  end)
-
-  it('protocol="auto" still autodetects', function()
-    H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
-      vim.g.alt_image = { protocol = 'auto' }
-      local m = require('alt-image')
-      assert.equals(require('alt-image.iterm2'), m._provider())
-    end)
-  end)
-
   it('forwards set/get/del to chosen provider', function()
     H.with_env({ TERM_PROGRAM = 'iTerm.app' }, function()
       H.setup_capture()

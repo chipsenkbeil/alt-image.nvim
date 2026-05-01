@@ -5,7 +5,6 @@
 -- via the global table:
 --
 --   vim.g.alt_image = {
---     protocol  = 'auto',                    -- 'iterm2' | 'sixel' | 'auto'
 --     magick    = { 'magick', 'convert' },   -- string | string[] | false
 --     img2sixel = 'img2sixel',               -- string | string[] | false
 --   }
@@ -21,7 +20,6 @@
 -- with no nested tables, so shallow merge is correct here.
 
 ---@class altimage.Config
----@field protocol? 'auto'|'iterm2'|'sixel'
 ---@field magick? string|string[]|false
 ---@field img2sixel? string|string[]|false
 
@@ -29,7 +27,6 @@ local M = {}
 
 ---@type altimage.Config
 local DEFAULTS = {
-	protocol = "auto",
 	magick = { "magick", "convert" },
 	img2sixel = { "img2sixel" },
 }

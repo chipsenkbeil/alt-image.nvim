@@ -2,12 +2,13 @@
 
 > Drop-in `vim.ui.img` for terminals without the kitty graphics protocol.
 
-Pure-Lua iTerm2 (OSC 1337) and sixel (DCS) providers. Autodetects what your
-terminal supports. Optionally accelerates crop + encode through `magick` /
-`img2sixel` when present.
+Pure-Lua iTerm2 (OSC 1337) and sixel (DCS) providers. Optionally accelerates
+crop + encode through `magick` / `img2sixel` when present.
 
 ```lua
-vim.ui.img = require('alt-image')
+vim.ui.img = require('alt-image')          -- autodetect
+vim.ui.img = require('alt-image.iterm2')   -- iTerm2 / WezTerm (OSC 1337)
+vim.ui.img = require('alt-image.sixel')    -- foot, mlterm, xterm+sixel, …
 ```
 
 That's it. After this, `vim.ui.img.set / get / del` works the same as on a
@@ -39,16 +40,12 @@ automatically when present for real DEFLATE PNG output.
 
 ## Configuration
 
-No `setup()` function. Override individual fields via `vim.g.alt_image`;
-anything you don't set keeps its default. Read at call-time, so order of
-plugin load vs. config doesn't matter.
+No `setup()` function. Protocol choice is expressed by which module you
+require (see snippet above). The only configurable surface is the optional
+external-tool acceleration:
 
 ```lua
 vim.g.alt_image = {
-  -- Which protocol to use. 'auto' picks via env-var fast paths, then a
-  -- terminal capability probe.
-  protocol = 'auto',                    -- 'auto' | 'iterm2' | 'sixel'
-
   -- ImageMagick CLI for fast crop + (re)encode. Accepts a single binary
   -- name, an ordered list of candidates (first executable wins), or `false`
   -- to disable the path entirely. Falls through to pure-Lua otherwise.
@@ -59,12 +56,7 @@ vim.g.alt_image = {
 }
 ```
 
-To force a specific protocol without reading config:
-
-```lua
-vim.ui.img = require('alt-image.iterm2')   -- iTerm2 / WezTerm (OSC 1337)
-vim.ui.img = require('alt-image.sixel')    -- foot, mlterm, xterm+sixel, …
-```
+Read at call-time, so order of plugin load vs. config doesn't matter.
 
 ## Health
 
