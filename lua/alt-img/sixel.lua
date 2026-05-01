@@ -343,6 +343,15 @@ function M.del(id)
     return true
 end
 
+-- Force every registered placement to re-emit on the next render tick.
+-- Use after `:mode`, `:redraw!`, terminal-side clears, or any other event
+-- that has wiped image bytes from the terminal compositor without an
+-- accompanying nvim grid update. The position-equality elision in the
+-- render loop otherwise assumes those pixels are still there.
+function M.refresh()
+    render.refresh()
+end
+
 function M._supported(opts)
     opts = opts or {}
     if vim.env.TERM_PROGRAM == "Apple_Terminal" then

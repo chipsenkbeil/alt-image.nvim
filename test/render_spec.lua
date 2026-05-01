@@ -200,6 +200,38 @@ describe("alt-img._core.render", function()
         assert.equals(before, vim.o.termsync)
     end)
 
+    it("refresh re-emits every placement even with unchanged positions", function()
+        -- After `:mode` or any external clear, image bytes are gone from the
+        -- terminal even though our last_positions still match next_positions.
+        -- The position-elision in tick() would skip the re-emit; refresh()
+        -- nulls last_positions so the next tick treats every placement as
+        -- moved and re-emits the cached payload.
+        local emitted = { [1] = 0, [2] = 0 }
+        local fake = {
+            _emit_at = function(id)
+                emitted[id] = (emitted[id] or 0) + 1
+            end,
+        }
+        render.register(fake, 1, function()
+            return pos(1, 1)
+        end)
+        render.register(fake, 2, function()
+            return pos(5, 5)
+        end)
+        render.flush() -- initial paint
+        assert.equals(1, emitted[1])
+        assert.equals(1, emitted[2])
+        -- Mark dirty without movement → no re-emit.
+        render.invalidate(fake, 1)
+        render.flush()
+        assert.equals(1, emitted[1])
+        assert.equals(1, emitted[2])
+        -- refresh() should re-emit both.
+        render.refresh()
+        assert.equals(2, emitted[1])
+        assert.equals(2, emitted[2])
+    end)
+
     it("emits placements in zindex ascending order", function()
         local order = {}
         local fake = {

@@ -199,6 +199,21 @@ function M.invalidate(provider, id)
     end
 end
 
+-- Force every placement to re-emit on the next tick — even if its resolved
+-- screen position hasn't changed. Use when something OUTSIDE alt-img has
+-- wiped the terminal's image plane: `:mode`, `:redraw!`, an external clear,
+-- a terminal-side resize race, etc. The position-equality elision in tick()
+-- (which keeps mouse/typing from re-pushing every tick) treats stale image
+-- bytes as "still there"; this clears that assumption by nulling each
+-- placement's last_positions, so the next tick sees a movement and re-emits.
+function M.refresh()
+    for _, p in pairs(placements) do
+        p.last_positions = nil
+        p.redraw = true
+    end
+    tick()
+end
+
 -- Synchronously run a tick. Used by callers that need immediate emission
 -- (e.g. set() from tests). Emission completes before this returns.
 function M.flush()

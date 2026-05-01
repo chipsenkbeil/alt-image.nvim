@@ -56,6 +56,9 @@ end
 function M.del(id)
     return M._provider().del(id)
 end
+function M.refresh()
+    return M._provider().refresh()
+end
 
 function M._supported(o)
     for _, name in ipairs(DETECT_ORDER) do

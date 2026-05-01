@@ -156,7 +156,19 @@ local function provider_name()
     return "<unknown>"
 end
 
+-- Force re-emit of every placement. Useful after `:mode`, `:redraw!`, or
+-- any other terminal-side wipe that leaves image cells blank without
+-- changing the placement's resolved screen position.
+vim.api.nvim_create_user_command("AltImgRefresh", function()
+    if vim.ui.img and vim.ui.img.refresh then
+        vim.ui.img.refresh()
+    else
+        print("alt-img: vim.ui.img.refresh() not available")
+    end
+end, {})
+
 vim.api.nvim_create_user_command("AltImgInfo", function()
+    local util = require("alt-img._core.util")
     local lines = {
         "alt-img.nvim diagnostics",
         "==========================",
@@ -169,12 +181,26 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
         "",
         "Neovim:",
         string.format("  version        = v%d.%d.%d", vim.version().major, vim.version().minor, vim.version().patch),
-        "",
-        "Active vim.ui.img provider:",
-        "  module         = " .. provider_name(),
-        "",
-        "Per-provider _supported():",
     }
+
+    -- Cell pixel size — what the providers use to convert opts.width/height
+    -- (in cells) to pixel dims for the encoder. Trigger a fresh CSI 16t
+    -- query if we haven't asked yet so the printed value reflects the
+    -- terminal's current cell metrics, not the platform default.
+    pcall(util.query_cell_size)
+    local cw, ch = util.cell_pixel_size()
+    table.insert(lines, "")
+    table.insert(lines, "Cell pixel size (CSI 16t):")
+    table.insert(lines, string.format("  width  = %d px", cw))
+    table.insert(lines, string.format("  height = %d px", ch))
+    table.insert(lines, string.format("  queried = %s", tostring(util._cell_size_queried)))
+
+    table.insert(lines, "")
+    table.insert(lines, "Active vim.ui.img provider:")
+    table.insert(lines, "  module         = " .. provider_name())
+
+    table.insert(lines, "")
+    table.insert(lines, "Per-provider _supported():")
     local i_ok, i_msg = require("alt-img.iterm2")._supported()
     local s_ok, s_msg = require("alt-img.sixel")._supported()
     table.insert(lines, string.format("  iterm2._supported() = %s, %s", tostring(i_ok), i_msg or "no message"))
@@ -198,6 +224,46 @@ vim.api.nvim_create_user_command("AltImgInfo", function()
             png_encode.has_libz() and "active" or "fallback (stored blocks)"
         )
     )
+
+    -- Active placements per provider, with their resolved opts (post-derive_dims).
+    -- Useful when the displayed image looks wrong-sized — opts.width/height
+    -- here are in cells, and the encoder targets opts.* × cell_pixel_size.
+    local function dump_placements(provider_label, mod)
+        local state = mod._state or {}
+        local rows = {}
+        for id, s in pairs(state) do
+            rows[#rows + 1] = id
+        end
+        table.sort(rows)
+        if #rows == 0 then
+            table.insert(lines, string.format("  %s: no placements", provider_label))
+            return
+        end
+        table.insert(lines, string.format("  %s:", provider_label))
+        for _, id in ipairs(rows) do
+            local s = state[id]
+            local o = s.opts or {}
+            table.insert(
+                lines,
+                string.format(
+                    "    id=%d  relative=%s  row=%s col=%s  width=%s height=%s  buf=%s  → target=%s×%s px",
+                    id,
+                    tostring(o.relative),
+                    tostring(o.row),
+                    tostring(o.col),
+                    tostring(o.width),
+                    tostring(o.height),
+                    tostring(o.buf),
+                    tostring((o.width or 0) * cw),
+                    tostring((o.height or 0) * ch)
+                )
+            )
+        end
+    end
+    table.insert(lines, "")
+    table.insert(lines, "Active placements:")
+    dump_placements("alt-img.iterm2", require("alt-img.iterm2"))
+    dump_placements("alt-img.sixel", require("alt-img.sixel"))
 
     for _, l in ipairs(lines) do
         print(l)
@@ -246,5 +312,6 @@ print("  :AltImgMouse ui     (image follows mouse, absolute terminal coords)")
 print("  :AltImgMouse editor (image follows mouse, relative to editor)")
 print("  :AltImgMouse off    (stop following)")
 print("  :AltImgInfo                    (diagnostics: terminal + provider state)")
+print("  :AltImgRefresh                 (force re-emit after :mode / :redraw! / external clear)")
 print("  :AltImgProvider iterm2|sixel|auto  (switch vim.ui.img provider)")
 print("  :checkhealth alt-img alt-img.iterm2 alt-img.sixel")
