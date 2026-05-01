@@ -98,11 +98,22 @@ local function ensure_resized(s)
     return rgba, w, h
 end
 
+-- Read sixel_pixel_scale fresh on each build so toggling it in vim.g
+-- without restarting takes effect on the next render. Clamp to >= 1.
+local function sixel_scale()
+    local s = (_config.read() or {}).sixel_pixel_scale or 1
+    if type(s) ~= "number" or s < 1 then
+        return 1
+    end
+    return math.floor(s)
+end
+
 local function build_sixel(s)
     if s.sixel_cache then
         return s.sixel_cache
     end
     util.query_cell_size()
+    local scale = sixel_scale()
 
     -- magick fast path: do decode + resize + sixel-encode in one subprocess.
     -- Bypasses the pure-Lua decoder entirely, which is the dominant cost on
@@ -111,7 +122,7 @@ local function build_sixel(s)
         local out
         if s.opts.width and s.opts.height then
             local cw, ch = util.cell_pixel_size()
-            out = magick.encode_sixel_from_png_resized(s.data, s.opts.width * cw, s.opts.height * ch)
+            out = magick.encode_sixel_from_png_resized(s.data, s.opts.width * cw * scale, s.opts.height * ch * scale)
         else
             out = magick.encode_sixel_from_png(s.data)
         end
@@ -124,6 +135,9 @@ local function build_sixel(s)
     -- Pure-Lua fallback: decode, optionally resize, then encode through the
     -- libsixel-or-pure-Lua dispatcher.
     local rgba, w, h = ensure_resized(s)
+    if scale > 1 then
+        rgba, w, h = image.resize(rgba, w, h, w * scale, h * scale)
+    end
     s.sixel_cache = senc.encode_sixel_dispatch(rgba, w, h)
     return s.sixel_cache
 end
@@ -135,12 +149,13 @@ end
 local function build_sixel_cropped(s, src)
     util.query_cell_size()
     local cw, ch = util.cell_pixel_size()
-    local x_px = src.x * cw
-    local y_px = src.y * ch
-    local w_px = src.w * cw
-    local h_px = src.h * ch
-    local full_w = s.opts.width * cw
-    local full_h = s.opts.height * ch
+    local scale = sixel_scale()
+    local x_px = src.x * cw * scale
+    local y_px = src.y * ch * scale
+    local w_px = src.w * cw * scale
+    local h_px = src.h * ch * scale
+    local full_w = s.opts.width * cw * scale
+    local full_h = s.opts.height * ch * scale
 
     if magick.binary() then
         local accel = magick.crop_resized_to_sixel(s.data, full_w, full_h, x_px, y_px, w_px, h_px)
@@ -150,6 +165,9 @@ local function build_sixel_cropped(s, src)
     end
 
     local rgba, w, h = ensure_resized(s)
+    if scale > 1 then
+        rgba, w, h = image.resize(rgba, w, h, w * scale, h * scale)
+    end
     local cropped, cw_px, ch_px = image.crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
     return senc.encode_sixel_dispatch(cropped, cw_px, ch_px)
 end

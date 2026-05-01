@@ -732,6 +732,141 @@ describe("magick.encode_sixel_from_png_resized", function()
     end)
 end)
 
+describe("sixel_pixel_scale", function()
+    -- iTerm2's sixel renderer uses physical (retina) pixels, so a 1×
+    -- sixel encode shows up at half the requested cell area on a 2x
+    -- display. The sixel_pixel_scale config multiplies the encoder's
+    -- target pixel dims to compensate.
+    local function read_fixture()
+        local f = io.open("test/fixtures/4x4.png", "rb")
+        local b = f:read("*a")
+        f:close()
+        return b
+    end
+
+    it("scale=2 doubles the magick -sample geometry", function()
+        local saved_system = vim.system
+        local saved_executable = vim.fn.executable
+        local saved_g = vim.g.alt_img
+
+        vim.fn.executable = function(name)
+            if name == "magick" then
+                return 1
+            end
+            return saved_executable(name)
+        end
+        local calls = {}
+        vim.system = function(cmd, opts)
+            table.insert(calls, { cmd = cmd, opts = opts })
+            return {
+                wait = function()
+                    return { code = 0, stdout = '\027Pq"1;1;64;128#0!64~-\027\\' }
+                end,
+            }
+        end
+
+        package.loaded["alt-img"] = nil
+        package.loaded["alt-img.sixel"] = nil
+        package.loaded["alt-img._core.util"] = nil
+        package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.magick"] = nil
+        package.loaded["alt-img._core.render"] = nil
+        package.loaded["alt-img._core.carrier"] = nil
+        package.loaded["alt-img._core.image"] = nil
+        package.loaded["alt-img._core.config"] = nil
+        package.loaded["alt-img.sixel._encode"] = nil
+        package.loaded["alt-img.sixel._libsixel"] = nil
+
+        vim.g.alt_img = { magick = "magick", img2sixel = false, sixel_pixel_scale = 2 }
+        require("alt-img._core.util")._reset_executable_cache()
+        H.setup_capture()
+        local sixel = require("alt-img.sixel")
+
+        local ok, err = pcall(function()
+            local id = sixel.set(read_fixture(), { relative = "ui", row = 1, col = 1, width = 4, height = 4 })
+            -- With cell_w=8, cell_h=16 (defaults), width=4, height=4:
+            -- target = 4*8*2 × 4*16*2 = 64×128 px (vs 32×64 at scale=1).
+            assert.equals(1, #calls)
+            local cmd = calls[1].cmd
+            local saw_sample = false
+            for i = 1, #cmd - 1 do
+                if cmd[i] == "-sample" and cmd[i + 1] == "64x128!" then
+                    saw_sample = true
+                end
+            end
+            assert.is_true(saw_sample, "expected -sample 64x128! when sixel_pixel_scale=2")
+            sixel.del(id)
+        end)
+
+        vim.system = saved_system
+        vim.fn.executable = saved_executable
+        vim.g.alt_img = saved_g
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("scale=1 (default) keeps the geometry at 1×", function()
+        local saved_system = vim.system
+        local saved_executable = vim.fn.executable
+        local saved_g = vim.g.alt_img
+
+        vim.fn.executable = function(name)
+            if name == "magick" then
+                return 1
+            end
+            return saved_executable(name)
+        end
+        local calls = {}
+        vim.system = function(cmd, opts)
+            table.insert(calls, { cmd = cmd, opts = opts })
+            return {
+                wait = function()
+                    return { code = 0, stdout = '\027Pq"1;1;32;64#0!32~-\027\\' }
+                end,
+            }
+        end
+
+        package.loaded["alt-img"] = nil
+        package.loaded["alt-img.sixel"] = nil
+        package.loaded["alt-img._core.util"] = nil
+        package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.magick"] = nil
+        package.loaded["alt-img._core.render"] = nil
+        package.loaded["alt-img._core.carrier"] = nil
+        package.loaded["alt-img._core.image"] = nil
+        package.loaded["alt-img._core.config"] = nil
+        package.loaded["alt-img.sixel._encode"] = nil
+        package.loaded["alt-img.sixel._libsixel"] = nil
+
+        vim.g.alt_img = { magick = "magick", img2sixel = false }
+        require("alt-img._core.util")._reset_executable_cache()
+        H.setup_capture()
+        local sixel = require("alt-img.sixel")
+
+        local ok, err = pcall(function()
+            local id = sixel.set(read_fixture(), { relative = "ui", row = 1, col = 1, width = 4, height = 4 })
+            assert.equals(1, #calls)
+            local cmd = calls[1].cmd
+            local saw_sample = false
+            for i = 1, #cmd - 1 do
+                if cmd[i] == "-sample" and cmd[i + 1] == "32x64!" then
+                    saw_sample = true
+                end
+            end
+            assert.is_true(saw_sample, "expected -sample 32x64! at default scale")
+            sixel.del(id)
+        end)
+
+        vim.system = saved_system
+        vim.fn.executable = saved_executable
+        vim.g.alt_img = saved_g
+        if not ok then
+            error(err, 0)
+        end
+    end)
+end)
+
 describe("magick.crop_resized_to_sixel", function()
     local png_bytes = "FAKEPNG"
 
