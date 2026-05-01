@@ -35,6 +35,26 @@ local function run(cmd, stdin)
     return res.stdout
 end
 
+---Normalize magick's sixel DCS introducer so it matches `img2sixel`'s
+---output, and what most sixel terminals actually render correctly.
+---
+---magick emits `ESC P 0;0;0 q ...` — explicit DCS params with P1=0. Per
+---the VT3xx convention, P1=0 selects the default 2:1 pixel-aspect ratio,
+---so terminals that honor that field (notably iTerm2's sixel decoder)
+---scale the image vertically and ignore the raster `"pan;pad;w;h`
+---override that magick emits right after. Stripping the DCS params
+---collapses the introducer to `ESC P q ...` (img2sixel's shape), which
+---makes terminals fall back to the raster attribute and render at the
+---requested square-pixel size.
+---@param sixel string?
+---@return string?
+local function normalize_sixel_introducer(sixel)
+    if not sixel or #sixel == 0 then
+        return sixel
+    end
+    return (sixel:gsub("^\027P[%d;]+q", "\027Pq", 1))
+end
+
 ---Crop a PNG sub-rectangle and re-emit as PNG. Returns nil on failure.
 ---@param png_bytes string original PNG bytes
 ---@param x_px integer
@@ -67,7 +87,7 @@ function M.crop_to_sixel(png_bytes, x_px, y_px, w_px, h_px, colors)
     end
     local geom = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-crop", geom, "-define", def, "sixel:-" }, png_bytes)
+    return normalize_sixel_introducer(run({ bin, "-", "-crop", geom, "-define", def, "sixel:-" }, png_bytes))
 end
 
 ---Encode an existing PNG byte string as a sixel DCS string. Returns nil on
@@ -81,7 +101,7 @@ function M.encode_sixel_from_png(png_bytes, colors)
         return nil
     end
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-define", def, "sixel:-" }, png_bytes)
+    return normalize_sixel_introducer(run({ bin, "-", "-define", def, "sixel:-" }, png_bytes))
 end
 
 ---Encode a raw RGBA pixel buffer as a sixel DCS string. Returns nil on failure.
@@ -100,7 +120,9 @@ function M.encode_sixel_from_rgba(rgba, w_px, h_px, colors)
     end
     local size = string.format("%dx%d", w_px, h_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-size", size, "-depth", "8", "RGBA:-", "-define", def, "sixel:-" }, rgba)
+    return normalize_sixel_introducer(
+        run({ bin, "-size", size, "-depth", "8", "RGBA:-", "-define", def, "sixel:-" }, rgba)
+    )
 end
 
 ---Decode + nearest-neighbor resize + sixel-encode in one magick subprocess.
@@ -120,7 +142,7 @@ function M.encode_sixel_from_png_resized(png_bytes, w_px, h_px, colors)
     end
     local geom = string.format("%dx%d!", w_px, h_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-sample", geom, "-define", def, "sixel:-" }, png_bytes)
+    return normalize_sixel_introducer(run({ bin, "-", "-sample", geom, "-define", def, "sixel:-" }, png_bytes))
 end
 
 ---Decode + nearest-neighbor resize + PNG re-encode in one magick subprocess.
@@ -164,7 +186,9 @@ function M.crop_resized_to_sixel(png_bytes, full_w_px, full_h_px, x_px, y_px, w_
     local sample = string.format("%dx%d!", full_w_px, full_h_px)
     local crop = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
     local def = "sixel:colors=" .. tostring(colors or 256)
-    return run({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
+    return normalize_sixel_introducer(
+        run({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
+    )
 end
 
 return M

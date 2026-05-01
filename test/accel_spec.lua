@@ -587,6 +587,102 @@ describe("magick.crop_to_sixel", function()
     end)
 end)
 
+describe("magick sixel-introducer normalization", function()
+    -- Magick emits the DCS introducer "ESC P 0;0;0 q ..." with explicit
+    -- params. iTerm2's sixel renderer treats P1=0 as "default 2:1 pixel
+    -- aspect" (legacy VT3xx semantics) and ignores the raster `"pan;pad`
+    -- override that follows, producing a wrong-size image even though the
+    -- raster says square pixels. Stripping the DCS params makes the
+    -- introducer match what `img2sixel` emits ("ESC P q ..."), which all
+    -- tested terminals render at the raster's stated size.
+    local MAGICK_RAW = '\027P0;0;0q"1;1;32;64#0;2;100;0;0#0!16~-\027\\'
+    local NORMALIZED = '\027Pq"1;1;32;64#0;2;100;0;0#0!16~-\027\\'
+
+    it("strips the DCS params from encode_sixel_from_png output", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = MAGICK_RAW }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.encode_sixel_from_png("FAKEPNG"))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("strips the DCS params from encode_sixel_from_rgba output", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = MAGICK_RAW }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.encode_sixel_from_rgba("\0\0\0\0", 1, 1))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("strips the DCS params from encode_sixel_from_png_resized output", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = MAGICK_RAW }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.encode_sixel_from_png_resized("FAKEPNG", 32, 64))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("strips the DCS params from crop_to_sixel output", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = MAGICK_RAW }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.crop_to_sixel("FAKEPNG", 0, 0, 1, 1))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("strips the DCS params from crop_resized_to_sixel output", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = MAGICK_RAW }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.crop_resized_to_sixel("FAKEPNG", 32, 64, 0, 0, 1, 1))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
+    it("leaves an already-normalized sixel intact", function()
+        local _, _, restore = with_mocks({ magick = true }, function()
+            return { code = 0, stdout = NORMALIZED }
+        end, { magick = "magick" })
+        local magick = require("alt-img._core.magick")
+        local ok, err = pcall(function()
+            assert.equals(NORMALIZED, magick.encode_sixel_from_png("FAKEPNG"))
+        end)
+        restore()
+        if not ok then
+            error(err, 0)
+        end
+    end)
+end)
+
 describe("magick.encode_sixel_from_png_resized", function()
     local png_bytes = "FAKEPNG"
 
