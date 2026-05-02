@@ -169,6 +169,21 @@ M.subcommands = {
             for _, line in ipairs(M.info_lines()) do
                 print(line)
             end
+            -- The diagnostic dump usually triggers nvim's hit-enter prompt;
+            -- dismissing the prompt redraws the screen and clears image
+            -- cells. The render loop's `_force_all_dirty` autocmds (in
+            -- `_core/render.lua`) handle most cases, but as a belt-and-
+            -- suspenders measure register a one-shot listener so the next
+            -- user action restores the placements regardless of which
+            -- autocmd fires.
+            vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "ModeChanged", "WinEnter", "CmdlineLeave" }, {
+                once = true,
+                callback = function()
+                    if vim.ui.img and vim.ui.img.refresh then
+                        vim.ui.img.refresh()
+                    end
+                end,
+            })
         end,
     },
     refresh = {

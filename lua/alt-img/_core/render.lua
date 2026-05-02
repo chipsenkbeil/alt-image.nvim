@@ -242,33 +242,66 @@ M._timer = timer
 
 local AUGROUP = vim.api.nvim_create_augroup("alt-img.render", { clear = true })
 
+-- Cheap mark: just set the dirty flag. Tick still applies the position-
+-- equality elision so typing/cursor-movement that doesn't actually move
+-- a placement re-emits zero bytes. Used for hot autocmds (TextChanged,
+-- CursorMoved, WinScrolled).
 local function mark_all_dirty()
     for _, p in pairs(placements) do
         p.redraw = true
     end
 end
 
+-- Force mark: also nulls last_positions so the position-equality check
+-- in tick() always sees "moved" and re-emits, even when nothing visible
+-- has changed. Used for autocmds that correlate with a terminal-side
+-- screen wipe (mode transitions, message-prompt dismissal, buffer /
+-- window shuffling, terminal resize, resume from suspend). Without
+-- this, dismissing :AltImg info's hit-enter prompt would leave images
+-- gone until the user manually ran :AltImg refresh.
+M._force_all_dirty = function()
+    for _, p in pairs(placements) do
+        p.last_positions = nil
+        p.redraw = true
+    end
+end
+
 vim.api.nvim_create_autocmd({
-    "BufEnter",
-    "BufWinEnter",
-    "BufWritePost",
+    -- Hot path: fire on every keystroke and scroll-wheel tick. The
+    -- position-equality elision is what keeps typing responsive.
     "TextChanged",
     "TextChangedI",
     "CursorMoved",
     "CursorMovedI",
     "WinScrolled",
+}, {
+    group = AUGROUP,
+    callback = mark_all_dirty,
+})
+
+vim.api.nvim_create_autocmd({
+    -- Likely-wipe path: events that often correlate with the terminal
+    -- compositor evicting image cells (full redraws, mode prompts,
+    -- buffer/window shuffling, resize). Force re-emit regardless of
+    -- position-equality — image bytes may be gone even though our
+    -- last_positions still match next_positions.
+    "BufEnter",
+    "BufWinEnter",
+    "BufWritePost",
+    "WinEnter",
+    "WinNew",
+    "WinClosed",
     "WinResized",
     "VimResized",
     "VimResume",
-    "WinEnter",
-    "WinNew",
     "TabEnter",
-    "WinClosed",
     "ModeChanged",
     "CmdlineLeave",
 }, {
     group = AUGROUP,
-    callback = mark_all_dirty,
+    callback = function()
+        M._force_all_dirty()
+    end,
 })
 
 return M

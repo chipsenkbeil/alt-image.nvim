@@ -92,6 +92,48 @@ describe("alt-img._cmd completion", function()
 end)
 
 describe("alt-img._cmd info", function()
+    it("schedules a one-shot autocmd that calls vim.ui.img.refresh on next user action", function()
+        local cmd = fresh_cmd()
+        local saved_create = vim.api.nvim_create_autocmd
+        local registered_events
+        vim.api.nvim_create_autocmd = function(events, opts)
+            -- Record only the autocmd we care about (the one with `once=true`).
+            if opts and opts.once then
+                registered_events = events
+                -- Simulate the autocmd firing immediately so we can assert
+                -- the callback path.
+                if opts.callback then
+                    opts.callback({})
+                end
+            end
+            -- Return a fake autocmd id; tests don't read it.
+            return 1
+        end
+        local saved_img = vim.ui.img
+        local refreshed = false
+        vim.ui.img = {
+            refresh = function()
+                refreshed = true
+            end,
+        }
+        local ok, err = pcall(function()
+            cmd.dispatch({ fargs = { "info" } })
+            assert.is_table(registered_events)
+            -- Spot-check a couple of the events we registered for.
+            local seen = {}
+            for _, e in ipairs(registered_events) do
+                seen[e] = true
+            end
+            assert.is_true(seen.ModeChanged or seen.CursorMoved, "expected at least ModeChanged or CursorMoved")
+            assert.is_true(refreshed, "callback should call vim.ui.img.refresh()")
+        end)
+        vim.ui.img = saved_img
+        vim.api.nvim_create_autocmd = saved_create
+        if not ok then
+            error(err, 0)
+        end
+    end)
+
     it("info_lines() returns a non-empty diagnostic dump", function()
         local cmd = fresh_cmd()
         local lines = cmd.info_lines()

@@ -232,6 +232,34 @@ describe("alt-img._core.render", function()
         assert.equals(2, emitted[2])
     end)
 
+    it("_force_all_dirty re-emits even when positions are unchanged", function()
+        -- The autocmd group registers _force_all_dirty for events that
+        -- correlate with a terminal-side screen wipe (ModeChanged,
+        -- CmdlineLeave, WinResized, …). Unlike mark_all_dirty, it nulls
+        -- last_positions so the position-equality elision in tick()
+        -- always sees "moved" and re-emits — needed to recover after
+        -- :AltImg info's hit-enter prompt is dismissed.
+        local emitted = 0
+        local fake = {
+            _emit_at = function()
+                emitted = emitted + 1
+            end,
+        }
+        render.register(fake, 1, function()
+            return pos(1, 1)
+        end)
+        render.flush()
+        assert.equals(1, emitted)
+        -- Same position, plain invalidate: no re-emit (Bug #2 elision).
+        render.invalidate(fake, 1)
+        render.flush()
+        assert.equals(1, emitted)
+        -- Force-dirty: re-emit even though position is unchanged.
+        render._force_all_dirty()
+        render.flush()
+        assert.equals(2, emitted)
+    end)
+
     it("emits placements in zindex ascending order", function()
         local order = {}
         local fake = {
