@@ -92,46 +92,26 @@ describe("alt-img._cmd completion", function()
 end)
 
 describe("alt-img._cmd info", function()
-    it("schedules a one-shot autocmd that calls vim.ui.img.refresh on next user action", function()
+    it("opens a scratch split that holds the diagnostic dump", function()
+        -- Switching to a scratch buffer (instead of print) is what avoids
+        -- nvim's hit-enter prompt — and therefore the terminal-side
+        -- redraw that wipes image cells. Closing the split fires
+        -- WinClosed, which the render loop's force-dirty autocmd group
+        -- already handles, so placements re-emit naturally on dismissal.
         local cmd = fresh_cmd()
-        local saved_create = vim.api.nvim_create_autocmd
-        local registered_events
-        vim.api.nvim_create_autocmd = function(events, opts)
-            -- Record only the autocmd we care about (the one with `once=true`).
-            if opts and opts.once then
-                registered_events = events
-                -- Simulate the autocmd firing immediately so we can assert
-                -- the callback path.
-                if opts.callback then
-                    opts.callback({})
-                end
-            end
-            -- Return a fake autocmd id; tests don't read it.
-            return 1
-        end
-        local saved_img = vim.ui.img
-        local refreshed = false
-        vim.ui.img = {
-            refresh = function()
-                refreshed = true
-            end,
-        }
-        local ok, err = pcall(function()
-            cmd.dispatch({ fargs = { "info" } })
-            assert.is_table(registered_events)
-            -- Spot-check a couple of the events we registered for.
-            local seen = {}
-            for _, e in ipairs(registered_events) do
-                seen[e] = true
-            end
-            assert.is_true(seen.ModeChanged or seen.CursorMoved, "expected at least ModeChanged or CursorMoved")
-            assert.is_true(refreshed, "callback should call vim.ui.img.refresh()")
-        end)
-        vim.ui.img = saved_img
-        vim.api.nvim_create_autocmd = saved_create
-        if not ok then
-            error(err, 0)
-        end
+        local before_wins = #vim.api.nvim_list_wins()
+        cmd.dispatch({ fargs = { "info" } })
+        local wins = vim.api.nvim_list_wins()
+        assert.equals(before_wins + 1, #wins, "expected a new window for the info buffer")
+        local buf = vim.api.nvim_win_get_buf(wins[#wins])
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local joined = table.concat(lines, "\n")
+        assert.matches("alt%-img.nvim diagnostics", joined)
+        -- Buffer should be non-modifiable nofile scratch.
+        assert.equals("nofile", vim.bo[buf].buftype)
+        assert.is_false(vim.bo[buf].modifiable)
+        -- Cleanup: close the window we opened.
+        pcall(vim.api.nvim_win_close, wins[#wins], true)
     end)
 
     it("info_lines() returns a non-empty diagnostic dump", function()

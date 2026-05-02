@@ -162,28 +162,45 @@ function M.info_lines()
 end
 
 ---@type table<string, altimg.Subcommand>
+-- Open a scratch buffer in a horizontal split below, populate it with
+-- `lines`, mark non-modifiable, and bind `q` to close. We use a buffer
+-- instead of print() so the diagnostic dump never triggers nvim's
+-- hit-enter prompt — and therefore never causes the terminal-side full
+-- redraw that wipes our image cells. Closing the split fires WinClosed,
+-- which the render loop's force-dirty autocmd group already covers, so
+-- placements re-emit naturally.
+local function open_scratch(title, lines)
+    local buf = vim.api.nvim_create_buf(false, true) -- listed=false, scratch=true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].swapfile = false
+    vim.bo[buf].modifiable = false
+    vim.bo[buf].readonly = true
+    vim.bo[buf].filetype = "altimginfo"
+    pcall(vim.api.nvim_buf_set_name, buf, title)
+    -- Cap the split height so a long dump doesn't claim the whole screen.
+    local height = math.min(#lines + 1, math.max(10, math.floor(vim.o.lines * 0.5)))
+    vim.cmd("botright " .. height .. "new")
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.wo.wrap = false
+    vim.wo.number = false
+    vim.wo.relativenumber = false
+    vim.wo.signcolumn = "no"
+    vim.keymap.set(
+        "n",
+        "q",
+        "<cmd>close<cr>",
+        { buffer = buf, nowait = true, silent = true, desc = "close alt-img info" }
+    )
+    vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true })
+end
+
 M.subcommands = {
     info = {
-        desc = "Print runtime diagnostics (terminal env, cell size, scale, active placements).",
+        desc = "Open a scratch buffer with runtime diagnostics (terminal env, cell size, scale, active placements). `q` to close.",
         impl = function()
-            for _, line in ipairs(M.info_lines()) do
-                print(line)
-            end
-            -- The diagnostic dump usually triggers nvim's hit-enter prompt;
-            -- dismissing the prompt redraws the screen and clears image
-            -- cells. The render loop's `_force_all_dirty` autocmds (in
-            -- `_core/render.lua`) handle most cases, but as a belt-and-
-            -- suspenders measure register a one-shot listener so the next
-            -- user action restores the placements regardless of which
-            -- autocmd fires.
-            vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "ModeChanged", "WinEnter", "CmdlineLeave" }, {
-                once = true,
-                callback = function()
-                    if vim.ui.img and vim.ui.img.refresh then
-                        vim.ui.img.refresh()
-                    end
-                end,
-            })
+            open_scratch("alt-img://info", M.info_lines())
         end,
     },
     refresh = {

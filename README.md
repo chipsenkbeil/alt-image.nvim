@@ -195,6 +195,18 @@ make smoke-test   # interactive: :AltImgDemo ui|editor|buffer
 - **PNG only.** Both providers require PNG input — see *Input format*
   above. Non-PNG bytes are rejected at `set()`.
 
+## Architecture
+
+Living docs under [`docs/`](docs/) for anyone touching the internals:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module layout, render-loop
+  lifecycle (with ASCII timelines), dirty/refresh autocmd split, caching,
+  DPI scale auto-detect, external tool dispatch.
+- [`docs/ITERM2.md`](docs/ITERM2.md) — OSC 1337 sequence shape, encoding
+  pipeline, sizing math.
+- [`docs/SIXEL.md`](docs/SIXEL.md) — DCS sixel sequence shape, the DCS-params
+  footgun, retina pixel-scale issue, pure-Lua quantizer + band encoder.
+
 ## Status
 
 Pre-1.0. API tracks Neovim's upstream `vim.ui.img`.
