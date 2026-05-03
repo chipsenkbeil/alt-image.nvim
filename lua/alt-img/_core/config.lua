@@ -11,7 +11,8 @@
 --     sixel_pixel_scale            = nil,                      -- integer override; nil = auto
 --     precompute_crops             = true,                     -- background pre-encode on set()
 --     precompute_interval_ms       = 30,                       -- ms between precompute steps
---     precompute_idle_threshold_ms = 200,                      -- skip step if user active within this window
+--     precompute_start_delay_ms    = 500,                      -- ms before first step fires
+--     precompute_idle_threshold_ms = 500,                      -- skip step if user active within this window
 --     precompute_notify            = false,                    -- vim.notify on precompute start/finish
 --   }
 --
@@ -44,6 +45,7 @@
 ---@field sixel_pixel_scale? integer
 ---@field precompute_crops? boolean
 ---@field precompute_interval_ms? integer
+---@field precompute_start_delay_ms? integer
 ---@field precompute_idle_threshold_ms? integer
 ---@field precompute_notify? boolean
 
@@ -64,11 +66,18 @@ local DEFAULTS = {
     -- background magick / img2sixel work.
     precompute_crops = true,
     precompute_interval_ms = 30,
+    -- Initial delay before the first precompute step fires after set().
+    -- Gives the caller a window to register additional placements
+    -- (e.g. spawning a mouse-follow image right after the main image)
+    -- without precompute monopolizing main-thread cycles for the
+    -- in-flight set()s.
+    precompute_start_delay_ms = 500,
     -- Skip a precompute step if the user has been active (CursorMoved,
-    -- TextChanged, WinScrolled, …) within this window. Pauses background
-    -- work during scroll/typing so the main thread isn't competing with
-    -- precompute encoding for cycles. Set to 0 to disable throttling.
-    precompute_idle_threshold_ms = 200,
+    -- TextChanged, WinScrolled, MouseMove, …) within this window.
+    -- Pauses background work during scroll/typing/mouse-drag so the
+    -- main thread isn't competing with precompute encoding for cycles.
+    -- Set to 0 to disable throttling.
+    precompute_idle_threshold_ms = 500,
     -- vim.notify on precompute start / finish — useful for diagnosing
     -- whether perceived lag correlates with background encode work.
     -- Off by default to avoid log spam.

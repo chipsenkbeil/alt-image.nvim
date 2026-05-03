@@ -71,7 +71,13 @@ local function with_env(provider_name, tools, g, libz, system)
     package.loaded["alt-img.sixel._encode"] = nil
     package.loaded["alt-img.sixel._libsixel"] = nil
 
-    vim.g.alt_img = g
+    -- Stop any precompute timers leaked from earlier tests, then disable
+    -- precompute for this test so its background magick / img2sixel
+    -- subprocesses don't pollute the call-counting mock below.
+    pcall(function()
+        require("alt-img._core.precompute").cancel_all()
+    end)
+    vim.g.alt_img = vim.tbl_extend("force", g or {}, { precompute_crops = false })
     require("alt-img._core.util")._reset_executable_cache()
     -- Stub png.has_libz before the providers reach for it.
     require("alt-img._core.png").has_libz = function()

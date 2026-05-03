@@ -65,7 +65,16 @@ local _config = require("alt-img._core.config")
 local M = {}
 
 -- Active precompute timers, keyed by tostring(provider) .. ":" .. tostring(id).
-local active = {}
+--
+-- Stashed on _G so the table survives `package.loaded[...] = nil` reloads
+-- (used heavily in tests). Without this, an old timer's closure holds a
+-- stale local `active` reference and keeps firing — the new module's
+-- cancel() can't stop it because it operates on a fresh-empty `active`.
+-- The stale timer would then keep calling vim.system, hitting whatever
+-- mock the current test installed — corrupting subprocess-count
+-- assertions in unrelated specs.
+local active = _G._altimg_precompute_active or {}
+_G._altimg_precompute_active = active
 
 -- Activity tracking: `last_activity_ns` is the result of `vim.uv.hrtime()`
 -- at the time of the most recent user-visible event (cursor move, text
@@ -84,6 +93,19 @@ vim.api.nvim_create_autocmd({
     "InsertEnter",
     "InsertLeave",
 }, {
+    group = AUGROUP,
+    callback = function()
+        last_activity_ns = vim.uv.hrtime()
+    end,
+})
+
+-- MouseMove deserves a separate hook because (a) it isn't always present
+-- in the user's setup (only fires when 'mousemoveevent' is on), and (b)
+-- it's the most acutely-affected event when precompute monopolizes the
+-- main thread — a stuttering mouse-follow image is the symptom users
+-- notice first. Stamp activity on every mouse move so precompute pauses
+-- for the duration of a drag.
+pcall(vim.api.nvim_create_autocmd, "MouseMove", {
     group = AUGROUP,
     callback = function()
         last_activity_ns = vim.uv.hrtime()
@@ -179,9 +201,13 @@ function M.start(provider, id, opts)
     if type(interval) ~= "number" or interval < 1 then
         interval = 30
     end
+    local start_delay_ms = cfg.precompute_start_delay_ms
+    if type(start_delay_ms) ~= "number" or start_delay_ms < 0 then
+        start_delay_ms = 500
+    end
     local idle_threshold_ms = cfg.precompute_idle_threshold_ms
     if type(idle_threshold_ms) ~= "number" or idle_threshold_ms < 0 then
-        idle_threshold_ms = 200
+        idle_threshold_ms = 500
     end
     local notify = cfg.precompute_notify == true
 
@@ -197,8 +223,11 @@ function M.start(provider, id, opts)
     end
 
     local idx = 1
+    -- First arg to timer:start is the initial delay (ms before first
+    -- callback). Use start_delay_ms so the timer doesn't fire the moment
+    -- set() returns — see config comment for rationale.
     timer:start(
-        interval,
+        start_delay_ms,
         interval,
         vim.schedule_wrap(function()
             if idx > #variations then
@@ -243,6 +272,21 @@ end
 ---@return boolean
 function M._is_active(provider, id)
     return active[key(provider, id)] ~= nil
+end
+
+---Stop ALL active precompute timers regardless of (provider, id) key.
+---Intended for test setup — provider modules are reloaded across
+---test specs and stale timer closures (holding a stale provider /
+---vim.system reference) would otherwise keep firing during unrelated
+---tests and pollute subprocess-count assertions.
+function M.cancel_all()
+    for k, timer in pairs(active) do
+        if timer and not timer:is_closing() then
+            timer:stop()
+            timer:close()
+        end
+        active[k] = nil
+    end
 end
 
 ---Test hook: force last_activity_ns to a value. Pass nil/0 to reset.
