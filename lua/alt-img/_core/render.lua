@@ -85,27 +85,44 @@ local function tick()
 
     -- Snapshot dirty placements; detect movement.
     --
-    -- A placement that is dirty but whose resolved positions are identical
-    -- to last tick's gets its dirty flag cleared without entering
-    -- `initially_dirty`. Re-pushing many KB of sixel/OSC bytes on every
-    -- CursorMoved/TextChanged is the dominant per-keystroke cost during
-    -- typing, and the terminal cells haven't been touched if the position
-    -- and dims didn't change. If something else in this tick triggers
-    -- `need_clear` (a peer placement moved, an unregister landed), the
-    -- registry-expand branch below pulls every placement back in, so a
-    -- genuine framebuffer wipe still gets covered.
+    -- We always read positions, regardless of the `redraw` dirty flag.
+    -- Reasoning: the flag is set by autocmds (TextChanged, CursorMoved,
+    -- WinScrolled, …) but those don't fire reliably for every state
+    -- change that affects us. A line deletion that invalidates an
+    -- extmark (turning a buffer placement's positions from non-empty
+    -- to empty) sometimes leaves the autocmd quiet — the cursor stays
+    -- on the same line/col coords, the buffer changedtick increments
+    -- but TextChanged doesn't always reach us, and the placement's
+    -- redraw flag stays false. Without the unconditional read here,
+    -- the timer ticks would miss the change and the now-stale image
+    -- bytes would linger on the terminal.
+    --
+    -- Performance: get_pos is a single nvim_buf_get_extmark_by_id +
+    -- screenpos per visible window — well under 1 ms for typical M=1-3
+    -- placements. The position-equality elision below still skips the
+    -- emission cost when nothing actually moved (the dominant typing
+    -- case), so the only added cost is the cheap position read itself.
+    --
+    -- If something else in this tick triggers `need_clear` (a peer
+    -- placement moved, an unregister landed), the registry-expand
+    -- branch below pulls every placement back in, so a genuine
+    -- framebuffer wipe still gets covered.
     local need_clear = clear_pending
     local initially_dirty = {}
     for _, p in pairs(placements) do
-        if p.redraw then
-            local positions = p.get_pos() or {}
-            p.next_positions = positions
-            if not positions_equal(positions, p.last_positions) then
-                need_clear = true
-                initially_dirty[#initially_dirty + 1] = p
-            else
-                p.redraw = false
-            end
+        local positions = p.get_pos() or {}
+        p.next_positions = positions
+        if not positions_equal(positions, p.last_positions) or p.force_redraw then
+            -- Position changed, OR a force-path autocmd asked for a
+            -- screen-wipe-recovery re-emit even at unchanged coords.
+            need_clear = true
+            initially_dirty[#initially_dirty + 1] = p
+            p.force_redraw = false
+        elseif p.redraw then
+            -- Position unchanged; the autocmd-set dirty flag was a
+            -- false alarm (typing/cursor move that didn't shift our
+            -- anchor). Clear it without emitting.
+            p.redraw = false
         end
     end
 
@@ -428,16 +445,25 @@ local function mark_all_dirty_and_flush()
     end
 end
 
--- Force mark: also nulls last_positions so the position-equality check
--- in tick() always sees "moved" and re-emits, even when nothing visible
--- has changed. Used for autocmds that correlate with a terminal-side
--- screen wipe (mode transitions, message-prompt dismissal, buffer /
--- window shuffling, terminal resize, resume from suspend). Without
--- this, dismissing :AltImg info's hit-enter prompt would leave images
--- gone until the user manually ran :AltImg refresh.
+-- Force mark: sets `force_redraw` so the dirty scan pushes the
+-- placement to initially_dirty even when its resolved positions match
+-- last_positions. Used for autocmds that correlate with a terminal-
+-- side screen wipe (mode transitions, message-prompt dismissal,
+-- buffer / window shuffling, terminal resize, resume from suspend).
+-- Without this, dismissing :AltImg info's hit-enter prompt would
+-- leave images gone until the user manually ran :AltImg refresh.
+--
+-- Important: we deliberately DON'T null last_positions here. Doing so
+-- would erase the "we previously had image bytes at [old]" knowledge,
+-- which the dirty scan needs to detect "image went from visible to
+-- gone" (e.g. line-deletion invalidates the extmark, positions become
+-- empty). With last_positions=nil, positions_equal({}, nil) returns
+-- TRUE (both treated as "not visible"), the scan thinks nothing
+-- changed, and the stale image bytes linger on the terminal until
+-- the next genuine position change.
 M._force_all_dirty = function()
     for _, p in pairs(placements) do
-        p.last_positions = nil
+        p.force_redraw = true
         p.redraw = true
     end
 end

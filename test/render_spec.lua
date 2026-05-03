@@ -456,10 +456,11 @@ describe("alt-img._core.render", function()
     it("_force_all_dirty re-emits even when positions are unchanged", function()
         -- The autocmd group registers _force_all_dirty for events that
         -- correlate with a terminal-side screen wipe (ModeChanged,
-        -- CmdlineLeave, WinResized, …). Unlike mark_all_dirty, it nulls
-        -- last_positions so the position-equality elision in tick()
-        -- always sees "moved" and re-emits — needed to recover after
-        -- :AltImg info's hit-enter prompt is dismissed.
+        -- CmdlineLeave, WinResized, …). It sets a `force_redraw` flag
+        -- the dirty scan honors so the position-equality elision in
+        -- tick() always pushes the placement to initially_dirty even
+        -- when its resolved positions match last_positions — needed
+        -- to recover after :AltImg info's hit-enter prompt is dismissed.
         local emitted = 0
         local fake = {
             _emit_at = function()
@@ -479,6 +480,49 @@ describe("alt-img._core.render", function()
         render._force_all_dirty()
         render.flush()
         assert.equals(2, emitted)
+    end)
+
+    it("_force_all_dirty preserves last_positions so position-vanish is detected", function()
+        -- Regression: _force_all_dirty used to null last_positions, which
+        -- made positions_equal({}, nil) return TRUE — so a subsequent
+        -- "image went from visible to gone" change (e.g. line-deletion
+        -- invalidating a buffer extmark) was treated as no-change, and
+        -- the stale image bytes lingered until something else
+        -- re-triggered emission.
+        --
+        -- Now `_force_all_dirty` sets a `force_redraw` flag instead, and
+        -- last_positions is preserved. Tick can still see "vanish" by
+        -- comparing the new empty positions against the preserved
+        -- last_positions=[old].
+        local pos1 = pos(5, 10)
+        local emit_count = 0
+        local mode_call_count = 0
+        local fake = {
+            _emit_at = function()
+                emit_count = emit_count + 1
+            end,
+        }
+        render.register(fake, 1, function()
+            return pos1
+        end)
+        render.flush() -- initial paint
+        assert.equals(1, emit_count)
+
+        -- Simulate the buggy sequence: _force_all_dirty fires (e.g. from
+        -- a ModeChanged after :normal! dd), then the placement's get_pos
+        -- starts returning [] (extmark invalidated by the line deletion).
+        render._force_all_dirty()
+        pos1 = {} -- "extmark invalid → no positions"
+        H.reset_capture() -- discard whatever's been emitted before
+        render.flush()
+        -- The dirty scan must see: positions=[], last_positions=[old]
+        -- → not equal → push to dirty → SYNC frame fires for the
+        -- cleanup. (No image bytes since positions are empty, but the
+        -- SYNC + mode() inside still clears the framebuffer.)
+        local out = H.captured()
+        assert.matches("\027%[%?2026h", out, nil)
+        assert.matches("\027%[%?2026l", out, nil)
+        render.unregister(fake, 1)
     end)
 
     it("emits placements in zindex ascending order", function()
