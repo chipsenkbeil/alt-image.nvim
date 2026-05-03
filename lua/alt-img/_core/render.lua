@@ -163,8 +163,12 @@ local function tick()
             p.last_positions = p.next_positions
             p.redraw = false
         end
-        util.term_send(SYNC_END)
     end)
+
+    -- SYNC_END must run even if the emit body above errored — otherwise the
+    -- terminal stays in Mode 2026 and subsequent ticks nest fresh SYNC_STARTs
+    -- inside the still-open frame.
+    util.term_send(SYNC_END)
     vim.o.termsync = old_termsync
     is_drawing = false
     clear_pending = false

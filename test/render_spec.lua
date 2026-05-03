@@ -119,6 +119,38 @@ describe("alt-img._core.render", function()
         assert.matches("\027%[%?2026h", H.captured())
     end)
 
+    it("SYNC_END is emitted even when _emit_at throws", function()
+        -- If a provider's _emit_at raises, the terminal must not be left
+        -- stuck in Mode 2026: SYNC_END has to land before the error
+        -- propagates, otherwise the next tick nests a fresh SYNC_START
+        -- on top of the still-open frame.
+        --
+        -- Cleanup discipline: the placement stays registered on rethrow
+        -- (tick() rethrows before clearing redraw/last_positions). The
+        -- background timer holds a closure over this module's placements
+        -- table, so we must (a) unregister, AND (b) gate the throw behind
+        -- a flag so any timer callback already queued by vim.schedule_wrap
+        -- won't fire `error` after the test asserts have passed.
+        local arm_throw = true
+        local fake = {
+            _emit_at = function()
+                if arm_throw then
+                    error("provider boom")
+                end
+            end,
+        }
+        render.register(fake, 1, function()
+            return pos(1, 1)
+        end)
+        local ok = pcall(render.flush)
+        arm_throw = false
+        render.unregister(fake, 1)
+        assert.is_false(ok)
+        local out = H.captured()
+        assert.matches("\027%[%?2026h", out)
+        assert.matches("\027%[%?2026l", out)
+    end)
+
     it("invalidate of one placement without movement does not disturb peers", function()
         local emitted = { [1] = 0, [2] = 0, [3] = 0 }
         local fake = {
