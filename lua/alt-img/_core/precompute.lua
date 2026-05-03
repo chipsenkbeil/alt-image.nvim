@@ -227,16 +227,19 @@ function M.start(provider, id, opts)
     local total = #variations
     local started_ns = vim.uv.hrtime()
     if notify then
-        vim.schedule(function()
-            vim.notify(
-                string.format(
-                    "alt-img: precomputing %d crop variants (%s)",
-                    total,
-                    has_async and "async" or "sync"
-                ),
-                vim.log.levels.INFO
-            )
-        end)
+        -- precompute.start is invoked from a provider's set() (main loop),
+        -- not a fast-event context, so calling vim.notify directly is
+        -- safe. Avoiding the always-defer-via-vim.schedule keeps test-
+        -- driven schedule callbacks from crossing test boundaries and
+        -- counting against unrelated assertions.
+        vim.notify(
+            string.format(
+                "alt-img: precomputing %d crop variants (%s)",
+                total,
+                has_async and "async" or "sync"
+            ),
+            vim.log.levels.INFO
+        )
     end
 
     local timer_key = key(provider, id)
@@ -259,14 +262,29 @@ function M.start(provider, id, opts)
             active[timer_key] = nil
             if notify then
                 local elapsed_ms = (vim.uv.hrtime() - started_ns) / 1e6
-                vim.notify(
-                    string.format(
-                        "alt-img: precompute done (%d variants, %.0f ms wall)",
-                        total,
-                        elapsed_ms
-                    ),
-                    vim.log.levels.INFO
-                )
+                local function do_notify()
+                    vim.notify(
+                        string.format(
+                            "alt-img: precompute done (%d variants, %.0f ms wall)",
+                            total,
+                            elapsed_ms
+                        ),
+                        vim.log.levels.INFO
+                    )
+                end
+                -- maybe_finish can be reached from a vim.system on_done
+                -- callback (the async magick path) which is a fast-event
+                -- context — vim.notify → nvim_echo errors there. From
+                -- the timer's vim.schedule_wrap callback we're already
+                -- on the main loop and can call directly. Avoiding the
+                -- always-defer keeps test-driven schedule callbacks from
+                -- crossing test boundaries and counting against unrelated
+                -- assertions.
+                if vim.in_fast_event() then
+                    vim.schedule(do_notify)
+                else
+                    do_notify()
+                end
             end
         end
     end
