@@ -208,6 +208,31 @@ describe("alt-img._core.render", function()
         assert.equals(2, emitted[3])
     end)
 
+    it("WinScrolled emits synchronously, not on the next timer tick", function()
+        -- WinScrolled is on the sync-emit autocmd path: firing it should
+        -- re-emit moved placements before the autocmd returns, not wait
+        -- up to TICK_MS (30ms) for the timer.
+        local emitted = 0
+        local fake = {
+            _emit_at = function()
+                emitted = emitted + 1
+            end,
+        }
+        local pos1 = pos(5, 10)
+        render.register(fake, 1, function()
+            return pos1
+        end)
+        render.flush() -- initial paint
+        assert.equals(1, emitted)
+        -- Move and fire WinScrolled. The handler should mark dirty AND
+        -- flush in the same call — observable as the emit count incrementing
+        -- before nvim_exec_autocmds returns.
+        pos1 = pos(7, 10)
+        vim.api.nvim_exec_autocmds("WinScrolled", { group = "alt-img.render" })
+        assert.equals(2, emitted)
+        render.unregister(fake, 1)
+    end)
+
     it("emits a freshly-registered placement on the first flush", function()
         local emitted = 0
         local fake = {

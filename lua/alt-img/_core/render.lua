@@ -250,10 +250,35 @@ local AUGROUP = vim.api.nvim_create_augroup("alt-img.render", { clear = true })
 -- Cheap mark: just set the dirty flag. Tick still applies the position-
 -- equality elision so typing/cursor-movement that doesn't actually move
 -- a placement re-emits zero bytes. Used for hot autocmds (TextChanged,
--- CursorMoved, WinScrolled).
+-- CursorMoved).
 local function mark_all_dirty()
     for _, p in pairs(placements) do
         p.redraw = true
+    end
+end
+
+-- Synchronous-emit path: mark dirty AND tick immediately so our SYNC
+-- frame closes before nvim's post-autocmd grid flush. With this, the
+-- scroll-redraw bytes (which evict image cells the float / extmark
+-- overlapped) and our image re-emit bytes land in the SAME atomic
+-- terminal frame: vim.cmd.mode() inside tick() drains nvim's grid
+-- through ui_flush, so both the scroll repaint and the image emit are
+-- inside our \e[?2026h…\e[?2026l boundary. Without this, every
+-- WinScrolled would leave a 1–30 ms gap between nvim's flush frame
+-- (text scrolled, images evicted) and our timer-driven re-emit frame —
+-- pacing one visible blink per row scrolled.
+--
+-- Fast-event guard: vim.cmd.mode() can't run inside fast events. Fall
+-- back to vim.schedule (next loop iteration) when we're in one — still
+-- faster than waiting for the 30 ms timer, and crash-free.
+local function mark_all_dirty_and_flush()
+    for _, p in pairs(placements) do
+        p.redraw = true
+    end
+    if vim.in_fast_event() then
+        vim.schedule(tick)
+    else
+        tick()
     end
 end
 
@@ -272,16 +297,29 @@ M._force_all_dirty = function()
 end
 
 vim.api.nvim_create_autocmd({
-    -- Hot path: fire on every keystroke and scroll-wheel tick. The
-    -- position-equality elision is what keeps typing responsive.
+    -- Hot path: fires on every keystroke. Position-equality elision in
+    -- tick() turns no-op cursor/text changes into zero-byte ticks, so
+    -- the timer-driven cadence keeps typing responsive.
     "TextChanged",
     "TextChangedI",
     "CursorMoved",
     "CursorMovedI",
-    "WinScrolled",
 }, {
     group = AUGROUP,
     callback = mark_all_dirty,
+})
+
+vim.api.nvim_create_autocmd({
+    -- Sync-emit path: every WinScrolled correlates with nvim repainting
+    -- cells the float / buffer image used to occupy, evicting the
+    -- corresponding terminal-side image pixels. Re-emit synchronously so
+    -- our SYNC frame closes before nvim's natural post-autocmd flush —
+    -- both the scroll repaint and the image re-emit land in one atomic
+    -- terminal frame, eliminating the per-row blink.
+    "WinScrolled",
+}, {
+    group = AUGROUP,
+    callback = mark_all_dirty_and_flush,
 })
 
 vim.api.nvim_create_autocmd({
