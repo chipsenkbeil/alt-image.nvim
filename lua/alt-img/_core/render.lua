@@ -16,8 +16,10 @@
 --         `last_positions`, mark `need_clear`.
 --       * Wrap in Mode 2026 synchronized output. If need_clear or a queued
 --         clear (from unregister), do `vim.cmd.mode()` to clear framebuffer.
---       * Force TUI flush with `:redraw` to ensure any queued grid updates
---         (text repaint, float bg) land BEFORE our image bytes.
+--         `:mode` itself calls update_screen()+ui_flush() (see neovim
+--         src/nvim/ex_docmd.c:ex_mode), so the grid clear+repaint lands in
+--         the TTY buffer before we emit image bytes — no extra :redraw
+--         needed.
 --       * Re-emit each dirty placement at every position in its list. Update
 --         last_positions.
 --   - All emission happens synchronously within the SYNC block.
@@ -70,10 +72,12 @@ end
 -- The core scheduler step: re-emit all dirty placements, clearing the
 -- framebuffer first if anything moved or unregistered.
 --
--- All emission happens synchronously within the SYNC block. vim.cmd('redraw')
--- forces the TUI to flush any queued grid updates (text repaint, float bg)
--- to the TTY BEFORE our image bytes, ensuring they don't race past SYNC_END
--- and overwrite the image cells.
+-- All emission happens synchronously within the SYNC block. When need_clear,
+-- `vim.cmd.mode()` invalidates Neovim's grid AND immediately runs ex_redraw
+-- → update_screen() → ui_flush(), so the grid clear+repaint bytes land in
+-- the TTY buffer before our image bytes — no separate `:redraw` required.
+-- When need_clear is false, we don't dirty Neovim's grid in this tick, so
+-- there's nothing to flush before emitting.
 local function tick()
     if is_drawing then
         return
@@ -148,14 +152,11 @@ local function tick()
     local ok, err = pcall(function()
         util.term_send(SYNC_START)
         if need_clear then
+            -- :mode internally calls ex_redraw → update_screen → ui_flush,
+            -- so the grid clear+repaint hits the TTY buffer synchronously,
+            -- inside this sync frame, before any image bytes below.
             vim.cmd.mode()
         end
-        -- Force TUI grid -> TTY flush so any queued text/float-bg paint lands
-        -- BEFORE our image bytes. Without this, the float-bg or text-repaint
-        -- output would race past SYNC_END and overwrite the image cells.
-        --
-        -- TODO: Is this actually needed?
-        vim.cmd.redraw()
         for _, p in ipairs(emit_set) do
             for _, pos in ipairs(p.next_positions or {}) do
                 p.provider._emit_at(p.id, pos)

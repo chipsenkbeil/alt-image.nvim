@@ -169,7 +169,10 @@ provider.set(...)                                            │
               Mode 2026 sync block:                           │
                 term_send( "\e[?2026h" )         ───────────► │
                 if need_clear: vim.cmd.mode()                 │
-                vim.cmd("redraw")    -- flush text grid       │
+                  -- :mode → ex_redraw → update_screen +      │
+                  --   ui_flush, so the grid clear+repaint    │
+                  --   bytes hit the TTY inside this sync     │
+                  --   frame, before any image bytes below    │
                 for p in emit_set:                            │
                     for pos in p.next_positions:              │
                         provider._emit_at(p.id, pos) ───────► │
@@ -282,7 +285,7 @@ Clear flow inside tick() when need_clear:
 
   ┌─ SYNC_START ───────────────────────────────────┐
   │ vim.cmd.mode()      -- invalidate text grid    │
-  │ vim.cmd("redraw")   -- flush text repaint to TTY│
+  │                        AND flush via ex_redraw │
   │ provider._emit_at() -- write image bytes        │
   └─ SYNC_END ─────────────────────────────────────┘
 
@@ -290,8 +293,17 @@ Clear flow inside tick() when need_clear:
        (or as close to atomically as Mode 2026 supports).
 ```
 
-The order matters: `redraw` MUST land before the image emit, otherwise
-the text-grid bytes race past `SYNC_END` and overwrite our pixels.
+`:mode` itself already triggers `update_screen()` + `ui_flush()` in
+Neovim (`src/nvim/ex_docmd.c:ex_mode`), so the grid clear+repaint
+bytes land in the TTY buffer before our image bytes — no separate
+`vim.cmd.redraw()` call is needed inside the sync frame, and adding
+one only inflates the in-frame payload (which matters when the
+terminal's Mode 2026 buffer is finite).
+
+The order still matters: the grid bytes from `mode()` MUST land
+before the image emit, otherwise the text-grid output would race
+past `SYNC_END` and overwrite our pixels. `:mode`'s built-in flush
+is what guarantees that.
 
 ---
 
