@@ -5,10 +5,12 @@
 -- via the global table:
 --
 --   vim.g.alt_img = {
---     magick             = { 'magick', 'convert' },   -- string | string[] | false
---     img2sixel          = 'img2sixel',               -- string | string[] | false
---     crop_cache_size    = 64,                        -- integer (LRU max per placement)
---     sixel_pixel_scale  = nil,                       -- integer override; nil = auto
+--     magick                = { 'magick', 'convert' },   -- string | string[] | false
+--     img2sixel             = 'img2sixel',               -- string | string[] | false
+--     crop_cache_size       = 256,                       -- integer (LRU max per placement)
+--     sixel_pixel_scale     = nil,                       -- integer override; nil = auto
+--     precompute_crops      = true,                      -- background pre-encode on set()
+--     precompute_interval_ms = 30,                       -- ms between precompute steps
 --   }
 --
 -- `sixel_pixel_scale` exists because iTerm2 (and a few others, e.g.
@@ -38,6 +40,8 @@
 ---@field img2sixel? string|string[]|false
 ---@field crop_cache_size? integer
 ---@field sixel_pixel_scale? integer
+---@field precompute_crops? boolean
+---@field precompute_interval_ms? integer
 
 local M = {}
 
@@ -45,7 +49,17 @@ local M = {}
 local DEFAULTS = {
     magick = { "magick", "convert" },
     img2sixel = { "img2sixel" },
-    crop_cache_size = 64,
+    -- LRU max for the per-placement cropped-encoding cache. Must be ≥
+    -- 2*(image_height_cells - 1) for `precompute_crops` to be lossless;
+    -- 256 is enough for images up to ~128 cells tall (typical embedded
+    -- images are well under that).
+    crop_cache_size = 256,
+    -- Background pre-compute of cropped variants on placement creation.
+    -- See _core/precompute.lua. Disable with `precompute_crops = false`
+    -- if the foreground encode-on-demand cost is preferable to the
+    -- background magick / img2sixel work.
+    precompute_crops = true,
+    precompute_interval_ms = 30,
     -- sixel_pixel_scale is intentionally absent so callers can detect
     -- "user did not set this" (nil) and fall back to auto-detect via
     -- util.terminal_pixel_scale(). An explicit integer in vim.g.alt_img

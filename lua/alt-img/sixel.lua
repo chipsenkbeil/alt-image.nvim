@@ -314,7 +314,8 @@ function M.set(data_or_id, opts)
         derive_dims(s.data, s.opts)
         -- Only invalidate encoding caches when dimensions actually changed.
         -- Position, row/col, zindex, pad, relative (ui-mode only) don't affect encoding.
-        if s.opts.width ~= old_w or s.opts.height ~= old_h then
+        local dims_changed = s.opts.width ~= old_w or s.opts.height ~= old_h
+        if dims_changed then
             s.sixel_cache = nil -- dims changed -> may need re-encode
             s.sixel_cache_by_src = nil -- crop cache also stale on size change
             s.sixel_cache_by_src_order = nil
@@ -330,6 +331,9 @@ function M.set(data_or_id, opts)
         -- Mark dirty; the position-diff in tick() drives clearing automatically.
         render.invalidate(M, data_or_id)
         render.flush()
+        if dims_changed then
+            require("alt-img._core.precompute").start(M, data_or_id, s.opts)
+        end
         return data_or_id
     end
 
@@ -353,6 +357,10 @@ function M.set(data_or_id, opts)
     render.register(M, id, get_pos_for(id))
     -- Synchronous initial paint so callers (and tests) see the image immediately.
     render.flush()
+    -- Schedule background pre-encoding of cropped variants (see
+    -- _core/precompute.lua) so partial-visibility scrolls don't pay
+    -- the magick / img2sixel cost in the foreground.
+    require("alt-img._core.precompute").start(M, id, opts_canonical)
     return id
 end
 
@@ -368,6 +376,7 @@ function M.del(id)
     if id == math.huge then
         local any = next(state) ~= nil
         for k, _ in pairs(state) do
+            require("alt-img._core.precompute").cancel(M, k)
             require("alt-img._core.carrier").unregister(M, k)
             render.unregister(M, k)
         end
@@ -380,6 +389,7 @@ function M.del(id)
     if not state[id] then
         return false
     end
+    require("alt-img._core.precompute").cancel(M, id)
     require("alt-img._core.carrier").unregister(M, id)
     render.unregister(M, id)
     state[id] = nil
