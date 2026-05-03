@@ -286,6 +286,68 @@ describe("alt-img._core.render", function()
         render.unregister(fake, 1)
     end)
 
+    it("WinScrolled refreshes w_lines so screenpos-based get_pos works", function()
+        -- Regression: with virt_lines extmarks (carrier's relative=buffer
+        -- mode), Neovim's WinScrolled autocmd fires before update_screen
+        -- recomputes w_lines. screenpos() returns row=0 in that window,
+        -- so a get_pos closure that consults it would see "off-screen"
+        -- and tick would short-circuit with no emit. mark_all_dirty_and_
+        -- flush forces :redraw before tick reads positions, so screenpos
+        -- works correctly.
+        vim.cmd("enew")
+        for i = 1, 50 do
+            vim.fn.setline(i, "line " .. i)
+        end
+        local NS = vim.api.nvim_create_namespace("test-bug2-staleness")
+        local virt = {}
+        for i = 1, 20 do
+            virt[i] = { { "", "Normal" } }
+        end
+        local mark_id = vim.api.nvim_buf_set_extmark(0, NS, 27, 0, {
+            end_row = 28,
+            end_col = 0,
+            virt_lines = virt,
+            virt_lines_above = false,
+        })
+
+        vim.fn.cursor(28, 1)
+        vim.fn.winrestview({ topline = 23 })
+        vim.cmd("redraw")
+
+        local emitted = 0
+        local fake = {
+            _emit_at = function()
+                emitted = emitted + 1
+            end,
+        }
+        -- get_pos consults screenpos — it returns {} when the line is
+        -- "off-screen" per stale w_lines.
+        render.register(fake, 1, function()
+            local sp = vim.fn.screenpos(0, 28, 1)
+            if sp.row == 0 then
+                return {}
+            end
+            return { { row = sp.row + 1, col = sp.col, src = { x = 0, y = 0, w = 4, h = 4 } } }
+        end)
+        render.flush()
+        assert.equals(1, emitted)
+
+        -- Change topline WITHOUT calling :redraw. With virt_lines, the
+        -- next screenpos call would return row=0 until something forces
+        -- update_screen.
+        vim.fn.winrestview({ topline = 21 })
+        assert.equals(0, vim.fn.screenpos(0, 28, 1).row, "screenpos must be stale to exercise the bug")
+
+        -- Fire WinScrolled. mark_all_dirty_and_flush should run :redraw
+        -- before tick, so the get_pos closure sees a fresh non-zero row
+        -- and tick emits.
+        vim.api.nvim_exec_autocmds("WinScrolled", { group = "alt-img.render" })
+        assert.equals(2, emitted)
+
+        render.unregister(fake, 1)
+        vim.api.nvim_buf_del_extmark(0, NS, mark_id)
+    end)
+
     it("WinScrolled re-emits even when no placement's position changed", function()
         -- Regression: every scroll triggers nvim to repaint cells the
         -- images overlap (status line, scrolled cells, the float carrier's

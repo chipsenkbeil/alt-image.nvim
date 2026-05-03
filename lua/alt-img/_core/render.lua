@@ -329,9 +329,25 @@ local function mark_all_dirty_and_flush()
     M._force_all_dirty()
     if vim.in_fast_event() then
         vim.schedule(tick)
-    else
-        tick()
+        return
     end
+    -- WinScrolled autocmd fires before nvim's scroll redraw recomputes
+    -- w_lines (the screen-row → buffer-line cache that screenpos() reads).
+    -- For buffer placements with virt_lines (carrier's relative=buffer
+    -- mode), screenpos() returns row=0 until update_screen runs — so a
+    -- synchronous tick that calls carrier.get_positions during the
+    -- autocmd sees the placement as off-screen, returns empty positions,
+    -- and short-circuits without emitting. The image stays gone until
+    -- something else (mouse move, mode change → 30ms timer tick) re-
+    -- triggers emission.
+    --
+    -- Forcing :redraw here calls update_screen which refreshes w_lines.
+    -- The brief text-only flush :redraw produces (wrapped in nvim's
+    -- own \e[?2026h…\e[?2026l via the default 'termsync') is bounded
+    -- and microseconds wide at TTY speed — strictly better than the
+    -- 30 ms+ gap of falling back to the timer.
+    vim.cmd("redraw")
+    tick()
 end
 
 -- Force mark: also nulls last_positions so the position-equality check
