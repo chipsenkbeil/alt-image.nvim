@@ -331,23 +331,83 @@ local function mark_all_dirty_and_flush()
         vim.schedule(tick)
         return
     end
-    -- WinScrolled autocmd fires before nvim's scroll redraw recomputes
-    -- w_lines (the screen-row → buffer-line cache that screenpos() reads).
-    -- For buffer placements with virt_lines (carrier's relative=buffer
-    -- mode), screenpos() returns row=0 until update_screen runs — so a
-    -- synchronous tick that calls carrier.get_positions during the
-    -- autocmd sees the placement as off-screen, returns empty positions,
-    -- and short-circuits without emitting. The image stays gone until
-    -- something else (mouse move, mode change → 30ms timer tick) re-
-    -- triggers emission.
+    if is_drawing then
+        return
+    end
+
+    -- Custom sync-emit path for WinScrolled. Differs from tick() because
+    -- the WinScrolled autocmd fires BEFORE nvim's scroll redraw
+    -- recomputes w_lines (the screen-row → buffer-line cache that
+    -- screenpos() reads). For buffer placements with virt_lines
+    -- (carrier's relative=buffer mode), screenpos() returns row=0 until
+    -- update_screen runs. So we have to force a :redraw before we read
+    -- positions — and we have to do it INSIDE our Mode 2026 frame, or
+    -- else the redraw's text-only flush renders as a separate frame
+    -- and the user sees a "scrolled, no images" flicker.
     --
-    -- Forcing :redraw here calls update_screen which refreshes w_lines.
-    -- The brief text-only flush :redraw produces (wrapped in nvim's
-    -- own \e[?2026h…\e[?2026l via the default 'termsync') is bounded
-    -- and microseconds wide at TTY speed — strictly better than the
-    -- 30 ms+ gap of falling back to the timer.
-    vim.cmd("redraw")
-    tick()
+    -- Disabling 'termsync' before SYNC_START means nvim's own
+    -- flush_buf doesn't add a nested \e[?2026h…\e[?2026l around the
+    -- redraw bytes (a nested ESU per spec ends the OUTER frame
+    -- prematurely). The redraw bytes go raw to the TTY inside our
+    -- frame, then we read positions, build, and emit — all atomic.
+    --
+    -- Build happens INSIDE the SYNC frame here, unlike tick()'s C3
+    -- split. The trade is acceptable: typical scroll cache-misses for
+    -- crop variants take well under a terminal's Mode 2026 buffer
+    -- timeout (iTerm2 ≥150 ms, others typically similar). If a user
+    -- reports flicker traceable to long subprocess yields, the fix is
+    -- to pre-warm crop variants or split build out via vim.schedule.
+    is_drawing = true
+    local old_termsync = vim.o.termsync
+    vim.o.termsync = false
+    local ok, err = pcall(function()
+        util.term_send(SYNC_START)
+        vim.cmd("redraw")
+
+        -- Sort placements by zindex (ascending) so higher-z emits last
+        -- and paints on top.
+        local emit_set = {}
+        for _, p in pairs(placements) do
+            emit_set[#emit_set + 1] = p
+        end
+        table.sort(emit_set, function(a, b)
+            local ao = (a.provider.get and a.provider.get(a.id)) or {}
+            local bo = (b.provider.get and b.provider.get(b.id)) or {}
+            local az = ao.zindex or 0
+            local bz = bo.zindex or 0
+            if az ~= bz then
+                return az < bz
+            end
+            return a.id < b.id
+        end)
+
+        -- Read positions, build, and emit. force_all_dirty above set
+        -- last_positions=nil for every placement, so positions_equal
+        -- always sees "moved" — no elision, every placement re-emits.
+        for _, p in ipairs(emit_set) do
+            local positions = p.get_pos() or {}
+            for _, pos in ipairs(positions) do
+                if p.provider._build_at then
+                    local bytes = p.provider._build_at(p.id, pos)
+                    if bytes then
+                        util.term_send(bytes)
+                    end
+                else
+                    p.provider._emit_at(p.id, pos)
+                end
+            end
+            p.last_positions = positions
+            p.redraw = false
+        end
+    end)
+
+    util.term_send(SYNC_END)
+    vim.o.termsync = old_termsync
+    is_drawing = false
+    clear_pending = false
+    if not ok then
+        error(err)
+    end
 end
 
 -- Force mark: also nulls last_positions so the position-equality check
