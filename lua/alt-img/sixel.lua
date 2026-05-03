@@ -187,11 +187,19 @@ local function crop_cache_put(s, key, value)
     lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value, _config.read().crop_cache_size)
 end
 
--- Public so _render can call us. Reads state[id], emits sixel DCS at screen_pos.
-function M._emit_at(id, screen_pos)
+-- Build the full byte string we'd send for placement `id` at `screen_pos`.
+-- Returns nil when the placement is unknown (caller skips the term_send).
+--
+-- Split out from _emit_at so the render coordinator can construct payloads
+-- *outside* the Mode 2026 sync block: cache misses here can spawn img2sixel
+-- / magick via vim.system():wait() (in build_sixel / build_sixel_cropped),
+-- which yields the event loop. Inside the sync block that yield is a
+-- footgun — the terminal can decide our SYNC frame has gone stale and
+-- bail. Build first, term_send second.
+local function build_at(id, screen_pos)
     local s = state[id]
     if not s then
-        return
+        return nil
     end
     local opts = s.opts
     local src = screen_pos and screen_pos.src
@@ -220,7 +228,22 @@ function M._emit_at(id, screen_pos)
         screen_pos and screen_pos.row or (opts.row or 1),
         screen_pos and screen_pos.col or (opts.col or 1)
     )
-    util.term_send("\0277" .. "\027[?25l" .. cmove .. sixel .. "\0278" .. "\027[?25h")
+    return "\0277" .. "\027[?25l" .. cmove .. sixel .. "\0278" .. "\027[?25h"
+end
+
+-- Public so _render can call us. Builds the sixel DCS payload and writes it.
+function M._emit_at(id, screen_pos)
+    local bytes = build_at(id, screen_pos)
+    if bytes then
+        util.term_send(bytes)
+    end
+end
+
+-- Public: build only, no term_send. Called by _render in the pre-sync pass
+-- so payload construction (and any subprocess yields it triggers on cache
+-- miss) happens before SYNC_START.
+function M._build_at(id, screen_pos)
+    return build_at(id, screen_pos)
 end
 
 -- Closure factory: produces a position resolver for placement `id` that the

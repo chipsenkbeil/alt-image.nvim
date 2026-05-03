@@ -145,8 +145,50 @@ local function tick()
         end
     end
 
-    -- Emit, all inside one Mode 2026 sync block.
+    -- Two-pass emission:
+    --
+    --   Pass 1 (this loop, OUTSIDE the sync block): call provider._build_at
+    --   for each (placement, position) and collect the resulting byte
+    --   strings. Cache misses here can spawn magick / img2sixel via
+    --   vim.system():wait(); other helpers (util.query_cell_size) call
+    --   vim.wait. Both yield the event loop — fine outside the sync
+    --   block, dangerous inside (the terminal can decide our SYNC frame
+    --   has gone stale and abort it). last_positions / redraw flags are
+    --   updated here too: in lockstep with "we resolved a payload for
+    --   this placement", so a build error doesn't desync our bookkeeping.
+    --
+    --   Pass 2 (inside the sync block, below): only term_send. No
+    --   subprocess spawns, no event-loop yields, just byte writes.
+    --
+    -- Providers that don't expose _build_at (test fakes, future providers)
+    -- fall back to invoking _emit_at inside the sync block — preserving
+    -- the legacy contract at the cost of putting their build work back
+    -- inside the SYNC frame.
+    --
+    -- is_drawing is set BEFORE pass 1 so a yield during the build (from
+    -- vim.wait inside util.query_cell_size, or vim.system:wait inside
+    -- magick) can't let the 30 ms timer fire a re-entrant tick that would
+    -- redo the same build before the first invocation populates its
+    -- cache. The guard at the top of tick() makes that re-entrant call a
+    -- no-op.
     is_drawing = true
+    local payloads = {}
+    for _, p in ipairs(emit_set) do
+        for _, pos in ipairs(p.next_positions or {}) do
+            if p.provider._build_at then
+                local bytes = p.provider._build_at(p.id, pos)
+                if bytes then
+                    payloads[#payloads + 1] = { bytes = bytes }
+                end
+            else
+                payloads[#payloads + 1] = { provider = p.provider, id = p.id, pos = pos }
+            end
+        end
+        p.last_positions = p.next_positions
+        p.redraw = false
+    end
+
+    -- Pass 2: emit, all inside one Mode 2026 sync block.
     local old_termsync = vim.o.termsync
     vim.o.termsync = false
     local ok, err = pcall(function()
@@ -157,12 +199,12 @@ local function tick()
             -- inside this sync frame, before any image bytes below.
             vim.cmd.mode()
         end
-        for _, p in ipairs(emit_set) do
-            for _, pos in ipairs(p.next_positions or {}) do
-                p.provider._emit_at(p.id, pos)
+        for _, item in ipairs(payloads) do
+            if item.bytes then
+                util.term_send(item.bytes)
+            else
+                item.provider._emit_at(item.id, item.pos)
             end
-            p.last_positions = p.next_positions
-            p.redraw = false
         end
     end)
 

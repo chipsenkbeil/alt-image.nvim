@@ -495,3 +495,28 @@ describe("alt-img.sixel relative=buffer", function()
         vim.cmd("only")
     end)
 end)
+
+describe("alt-img.sixel _build_at / _emit_at parity", function()
+    local img, png_bytes
+    before_each(function()
+        H.setup_capture()
+        img = H.fresh_provider("sixel")
+        png_bytes = read_fixture()
+    end)
+
+    it("_build_at returns the exact bytes _emit_at would send", function()
+        local id = img.set(png_bytes, { row = 3, col = 7, width = 4, height = 4 })
+        local pos = { row = 3, col = 7, src = { x = 0, y = 0, w = 4, h = 4 } }
+        local built = img._build_at(id, pos)
+        assert.is_true(type(built) == "string")
+        assert.is_true(#built > 0)
+        H.reset_capture()
+        img._emit_at(id, pos)
+        assert.equals(built, H.captured())
+        img.del(id)
+    end)
+
+    it("_build_at returns nil for an unknown id", function()
+        assert.is_nil(img._build_at(99999, { row = 1, col = 1, src = { x = 0, y = 0, w = 1, h = 1 } }))
+    end)
+end)

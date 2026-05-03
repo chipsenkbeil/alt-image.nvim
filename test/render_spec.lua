@@ -208,6 +208,84 @@ describe("alt-img._core.render", function()
         assert.equals(2, emitted[3])
     end)
 
+    it("_build_at runs before SYNC_START; bytes term_send'd after", function()
+        -- Two-pass emission: providers that expose _build_at should have it
+        -- called *outside* the Mode 2026 sync block, and the returned bytes
+        -- term_send'd inside the block. Verify by checking the relative
+        -- order of (a) the _build_at callback firing and (b) SYNC_START
+        -- hitting nvim_ui_send.
+        local events = {}
+        local fake = {
+            _build_at = function(_, _)
+                events[#events + 1] = "build"
+                return "PAYLOAD"
+            end,
+            -- Required by the fallback path; should NOT be called when
+            -- _build_at is present.
+            _emit_at = function()
+                events[#events + 1] = "emit_at"
+            end,
+        }
+        -- Hook nvim_ui_send to record SYNC_START / SYNC_END / payload events.
+        local orig_send = vim.api.nvim_ui_send
+        vim.api.nvim_ui_send = function(s)
+            if s == "\027[?2026h" then
+                events[#events + 1] = "sync_start"
+            elseif s == "\027[?2026l" then
+                events[#events + 1] = "sync_end"
+            elseif s == "PAYLOAD" then
+                events[#events + 1] = "payload"
+            end
+            orig_send(s)
+        end
+        local ok, err = pcall(function()
+            render.register(fake, 1, function()
+                return pos(1, 1)
+            end)
+            render.flush()
+        end)
+        vim.api.nvim_ui_send = orig_send
+        assert.is_true(ok, ok and "" or tostring(err))
+        -- Required ordering: build → sync_start → payload → sync_end.
+        assert.same({ "build", "sync_start", "payload", "sync_end" }, events)
+        render.unregister(fake, 1)
+    end)
+
+    it("falls back to _emit_at inside sync when provider lacks _build_at", function()
+        -- Legacy contract: providers that only expose _emit_at still work.
+        -- The emit happens inside the sync block (no pre-build), so the
+        -- _emit_at call lands BETWEEN sync_start and sync_end.
+        local events = {}
+        local fake = {
+            _emit_at = function()
+                events[#events + 1] = "emit_at"
+                vim.api.nvim_ui_send("LEGACY")
+            end,
+        }
+        local orig_send = vim.api.nvim_ui_send
+        vim.api.nvim_ui_send = function(s)
+            if s == "\027[?2026h" then
+                events[#events + 1] = "sync_start"
+            elseif s == "\027[?2026l" then
+                events[#events + 1] = "sync_end"
+            elseif s == "LEGACY" then
+                events[#events + 1] = "payload"
+            end
+            orig_send(s)
+        end
+        local ok, err = pcall(function()
+            render.register(fake, 1, function()
+                return pos(1, 1)
+            end)
+            render.flush()
+        end)
+        vim.api.nvim_ui_send = orig_send
+        assert.is_true(ok, ok and "" or tostring(err))
+        -- Fallback ordering: sync_start → emit_at (which sends "payload") → sync_end.
+        assert.same({ "sync_start", "emit_at", "payload", "sync_end" }, events)
+        render.unregister(fake, 1)
+    end)
+
     it("WinScrolled emits synchronously, not on the next timer tick", function()
         -- WinScrolled is on the sync-emit autocmd path: firing it should
         -- re-emit moved placements before the autocmd returns, not wait

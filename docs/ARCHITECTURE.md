@@ -166,18 +166,24 @@ provider.set(...)                                            │
         │      emit_set = initially_dirty                     │
         └────────────────────┬───────────────────┘            │
                              ▼                                │
-              Mode 2026 sync block:                           │
+              Pass 1 (OUTSIDE sync, may yield on cache miss):
+                payloads = []
+                for p in emit_set:                            │
+                    for pos in p.next_positions:              │
+                        payloads.push(                        │
+                          provider._build_at(p.id, pos))      │
+                    p.last_positions = p.next_positions       │
+                    p.redraw = false                          │
+                                                              │
+              Pass 2 — Mode 2026 sync block:                  │
                 term_send( "\e[?2026h" )         ───────────► │
                 if need_clear: vim.cmd.mode()                 │
                   -- :mode → ex_redraw → update_screen +      │
                   --   ui_flush, so the grid clear+repaint    │
                   --   bytes hit the TTY inside this sync     │
                   --   frame, before any image bytes below    │
-                for p in emit_set:                            │
-                    for pos in p.next_positions:              │
-                        provider._emit_at(p.id, pos) ───────► │
-                    p.last_positions = p.next_positions       │
-                    p.redraw = false                          │
+                for bytes in payloads:                        │
+                    term_send(bytes)                 ───────► │
                 term_send( "\e[?2026l" )         ───────────► │
                                                               ▼
                                                     pixels paint
@@ -199,43 +205,52 @@ cell-coords changing.
 
 ## 5. Dirty events: when and how we re-emit
 
-There are two autocmd groups in `_core/render.lua`:
+There are three autocmd groups in `_core/render.lua`:
 
 ```
-                ┌──────────────────────────────┐
-                │ alt-img.render augroup       │
-                ├──────────────┬───────────────┤
-                │ HOT PATH     │ FORCE PATH    │
-                │              │               │
-                │ TextChanged  │ BufEnter      │
-                │ TextChangedI │ BufWinEnter   │
-                │ CursorMoved  │ BufWritePost  │
-                │ CursorMovedI │ WinEnter      │
-                │ WinScrolled  │ WinNew        │
-                │              │ WinClosed     │
-                │              │ WinResized    │
-                │              │ VimResized    │
-                │              │ VimResume     │
-                │              │ TabEnter      │
-                │              │ ModeChanged   │
-                │              │ CmdlineLeave  │
-                ├──────────────┴───────────────┤
-                │ → mark_all_dirty()           │
-                │ → _force_all_dirty()         │
-                └──────────────────────────────┘
+                ┌────────────────────────────────────────────┐
+                │ alt-img.render augroup                     │
+                ├──────────────┬───────────┬─────────────────┤
+                │ HOT PATH     │ SYNC PATH │ FORCE PATH      │
+                │ (timer)      │ (immediate│ (timer)         │
+                │              │  tick)    │                 │
+                │ TextChanged  │ WinScrolled BufEnter        │
+                │ TextChangedI │           │ BufWinEnter     │
+                │ CursorMoved  │           │ BufWritePost    │
+                │ CursorMovedI │           │ WinEnter        │
+                │              │           │ WinNew          │
+                │              │           │ WinClosed       │
+                │              │           │ WinResized      │
+                │              │           │ VimResized      │
+                │              │           │ VimResume       │
+                │              │           │ TabEnter        │
+                │              │           │ ModeChanged     │
+                │              │           │ CmdlineLeave    │
+                ├──────────────┼───────────┼─────────────────┤
+                │ → mark_all_  │ → mark_   │ → _force_all_   │
+                │   dirty()    │   _and_   │   dirty()       │
+                │              │   flush() │                 │
+                └──────────────┴───────────┴─────────────────┘
 ```
 
 | Path | What it sets | What tick() does |
 |---|---|---|
 | Hot (`mark_all_dirty`) | `p.redraw = true` | If positions match, flips `redraw` off without emitting (elision). |
+| Sync (`mark_all_dirty_and_flush`) | `p.redraw = true` + tick() called immediately | Re-emit synchronously inside the autocmd so our SYNC frame closes before nvim's post-autocmd flush. |
 | Force (`_force_all_dirty`) | `p.last_positions = nil; p.redraw = true` | Position-equality always sees "moved", so a re-emit always happens. |
 
 The hot path is for events that happen on *every keystroke* (typing,
 cursor blink) — re-emitting every time would saturate the TTY. The
-force path is for events that correlate with a terminal-side compositor
-wipe (mode changes, message-prompt dismissals, buffer/window/tab
-shuffling, terminal resize, suspend/resume): the cell coords didn't
-change, but the bytes are gone.
+sync path is the per-row blink fix: WinScrolled correlates with nvim
+repainting cells the float / buffer image used to occupy, evicting the
+corresponding terminal-side image pixels; doing the re-emit
+synchronously (instead of waiting up to 30 ms for the next timer tick)
+keeps the scroll repaint and our image emit inside one atomic Mode
+2026 frame from the terminal's POV. The force path is for events that
+correlate with a terminal-side compositor wipe (mode changes,
+message-prompt dismissals, buffer/window/tab shuffling, terminal
+resize, suspend/resume): the cell coords didn't change, but the bytes
+are gone.
 
 ### Events with no autocmd (manual recovery only)
 
@@ -283,15 +298,27 @@ relies entirely on `vim.cmd.mode()` inside the sync block.
 ```
 Clear flow inside tick() when need_clear:
 
+  Pass 1 (outside sync): provider._build_at(id, pos) -> bytes
+                         (cache misses can spawn magick / img2sixel,
+                          which yield the event loop — fine here)
+
+  Pass 2:
   ┌─ SYNC_START ───────────────────────────────────┐
-  │ vim.cmd.mode()      -- invalidate text grid    │
-  │                        AND flush via ex_redraw │
-  │ provider._emit_at() -- write image bytes        │
+  │ vim.cmd.mode()       -- invalidate text grid   │
+  │                         AND flush via ex_redraw│
+  │ for bytes in payloads: term_send(bytes)        │
+  │   (no subprocess spawns, no event-loop yields) │
   └─ SYNC_END ─────────────────────────────────────┘
 
        Terminal renders the SYNC frame atomically
        (or as close to atomically as Mode 2026 supports).
 ```
+
+Splitting the build (Pass 1) from the emit (Pass 2) means a cache miss
+that has to spawn `magick`/`img2sixel` for cropped / resized output
+yields the event loop *outside* the SYNC frame. Inside the frame would
+risk the terminal timing the sync block out and rendering an
+intermediate state.
 
 `:mode` itself already triggers `update_screen()` + `ui_flush()` in
 Neovim (`src/nvim/ex_docmd.c:ex_mode`), so the grid clear+repaint

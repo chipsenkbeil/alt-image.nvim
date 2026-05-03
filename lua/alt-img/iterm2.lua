@@ -170,11 +170,19 @@ local function crop_cache_put(s, key, value)
     lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, value, _config.read().crop_cache_size)
 end
 
--- Public so _render can call us. Reads state[id], emits OSC 1337 at screen_pos.
-function M._emit_at(id, screen_pos)
+-- Build the full byte string we'd send for placement `id` at `screen_pos`.
+-- Returns nil when the placement is unknown (caller skips the term_send).
+--
+-- Split out from _emit_at so the render coordinator can construct payloads
+-- *outside* the Mode 2026 sync block: cache misses here can spawn magick
+-- via vim.system():wait() (in ensure_full_png / build_png_cropped), which
+-- yields the event loop. Inside the sync block that yield is a footgun —
+-- the terminal can decide our SYNC frame has gone stale and bail. Build
+-- first, term_send second.
+local function build_at(id, screen_pos)
     local s = state[id]
     if not s then
-        return
+        return nil
     end
     local opts = s.opts
     local src = screen_pos and screen_pos.src
@@ -232,7 +240,22 @@ function M._emit_at(id, screen_pos)
     }
 
     local osc = "\027]1337;File=" .. table.concat(args, ";") .. ":" .. b64 .. "\007"
-    util.term_send(cs.save .. cs.hide .. cs.move .. osc .. cs.restore .. cs.show)
+    return cs.save .. cs.hide .. cs.move .. osc .. cs.restore .. cs.show
+end
+
+-- Public so _render can call us. Builds the OSC 1337 payload and writes it.
+function M._emit_at(id, screen_pos)
+    local bytes = build_at(id, screen_pos)
+    if bytes then
+        util.term_send(bytes)
+    end
+end
+
+-- Public: build only, no term_send. Called by _render in the pre-sync pass
+-- so payload construction (and any subprocess yields it triggers on cache
+-- miss) happens before SYNC_START.
+function M._build_at(id, screen_pos)
+    return build_at(id, screen_pos)
 end
 
 -- Closure factory: produces a position resolver for placement `id` that the
