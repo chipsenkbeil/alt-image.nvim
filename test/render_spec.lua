@@ -286,6 +286,30 @@ describe("alt-img._core.render", function()
         render.unregister(fake, 1)
     end)
 
+    it("WinScrolled re-emits even when no placement's position changed", function()
+        -- Regression: every scroll triggers nvim to repaint cells the
+        -- images overlap (status line, scrolled cells, the float carrier's
+        -- empty cells), evicting terminal-side image pixels. Even when
+        -- our resolved positions stay identical, we MUST re-emit on
+        -- WinScrolled — otherwise the image cells stay blank until
+        -- something else (mouse move, layout change) re-triggers emit.
+        local emitted = 0
+        local fake = {
+            _emit_at = function()
+                emitted = emitted + 1
+            end,
+        }
+        render.register(fake, 1, function()
+            return pos(5, 10)
+        end)
+        render.flush() -- initial paint
+        assert.equals(1, emitted)
+        -- Position stays put across WinScrolled; force-mark must re-emit anyway.
+        vim.api.nvim_exec_autocmds("WinScrolled", { group = "alt-img.render" })
+        assert.equals(2, emitted)
+        render.unregister(fake, 1)
+    end)
+
     it("WinScrolled emits synchronously, not on the next timer tick", function()
         -- WinScrolled is on the sync-emit autocmd path: firing it should
         -- re-emit moved placements before the autocmd returns, not wait

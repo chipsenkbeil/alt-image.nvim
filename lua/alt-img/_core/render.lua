@@ -299,24 +299,34 @@ local function mark_all_dirty()
     end
 end
 
--- Synchronous-emit path: mark dirty AND tick immediately so our SYNC
--- frame closes before nvim's post-autocmd grid flush. With this, the
--- scroll-redraw bytes (which evict image cells the float / extmark
--- overlapped) and our image re-emit bytes land in the SAME atomic
--- terminal frame: vim.cmd.mode() inside tick() drains nvim's grid
--- through ui_flush, so both the scroll repaint and the image emit are
--- inside our \e[?2026h…\e[?2026l boundary. Without this, every
+-- Synchronous-emit path: force-mark dirty (null last_positions) AND tick
+-- immediately so our SYNC frame closes before nvim's post-autocmd grid
+-- flush. With this, the scroll-redraw bytes (which evict image cells the
+-- float / extmark overlapped) and our image re-emit bytes land in the
+-- SAME atomic terminal frame: vim.cmd.mode() inside tick() drains nvim's
+-- grid through ui_flush, so both the scroll repaint and the image emit
+-- are inside our \e[?2026h…\e[?2026l boundary. Without this, every
 -- WinScrolled would leave a 1–30 ms gap between nvim's flush frame
 -- (text scrolled, images evicted) and our timer-driven re-emit frame —
 -- pacing one visible blink per row scrolled.
+--
+-- Why force-mark and not cheap-mark: a scroll can leave every placement
+-- at the same resolved screen position (e.g. one image is an editor-
+-- relative float that doesn't move on buffer scroll, the other has
+-- already gone fully off-screen and stays at empty positions). The
+-- position-equality elision in tick() would then skip emission, but the
+-- scroll's grid repaint still evicts terminal-side image pixels. The
+-- image stays gone until something else (mouse move, window layout
+-- change) re-triggers a real emit. Nulling last_positions forces every
+-- placement to be re-emitted on every WinScrolled regardless of whether
+-- its anchor moved — same trick the existing _force_all_dirty path uses
+-- for screen-wipe events.
 --
 -- Fast-event guard: vim.cmd.mode() can't run inside fast events. Fall
 -- back to vim.schedule (next loop iteration) when we're in one — still
 -- faster than waiting for the 30 ms timer, and crash-free.
 local function mark_all_dirty_and_flush()
-    for _, p in pairs(placements) do
-        p.redraw = true
-    end
+    M._force_all_dirty()
     if vim.in_fast_event() then
         vim.schedule(tick)
     else
