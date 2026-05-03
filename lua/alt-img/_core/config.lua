@@ -13,6 +13,7 @@
 --     precompute_interval_ms       = 30,                       -- ms between precompute steps
 --     precompute_start_delay_ms    = 500,                      -- ms before first step fires
 --     precompute_idle_threshold_ms = 500,                      -- skip step if user active within this window
+--     precompute_max_concurrent    = 2,                        -- max parallel async magick subprocesses
 --     precompute_notify            = false,                    -- vim.notify on precompute start/finish
 --   }
 --
@@ -47,6 +48,7 @@
 ---@field precompute_interval_ms? integer
 ---@field precompute_start_delay_ms? integer
 ---@field precompute_idle_threshold_ms? integer
+---@field precompute_max_concurrent? integer
 ---@field precompute_notify? boolean
 
 local M = {}
@@ -78,6 +80,12 @@ local DEFAULTS = {
     -- main thread isn't competing with precompute encoding for cycles.
     -- Set to 0 to disable throttling.
     precompute_idle_threshold_ms = 500,
+    -- When the provider exposes `_precompute_async`, precompute spawns
+    -- magick subprocesses in parallel up to this cap. Each subprocess
+    -- runs in its own OS process; the main thread is only briefly
+    -- busy at dispatch + completion. Set higher for faster warm-up at
+    -- the cost of more concurrent subprocesses.
+    precompute_max_concurrent = 2,
     -- vim.notify on precompute start / finish — useful for diagnosing
     -- whether perceived lag correlates with background encode work.
     -- Off by default to avoid log spam.

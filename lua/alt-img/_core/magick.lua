@@ -35,6 +35,36 @@ local function run(cmd, stdin)
     return res.stdout
 end
 
+---Run a subprocess fully asynchronously: returns immediately, invokes
+---`on_done(stdout_or_nil)` from the main loop when the subprocess exits.
+---vim.system's callback form runs the callback inside vim.schedule, so
+---it's safe to call vim API from inside `on_done`.
+---@param cmd string[]
+---@param stdin string
+---@param on_done fun(stdout: string?)
+local function run_async(cmd, stdin, on_done)
+    local ok = pcall(function()
+        vim.system(cmd, { stdin = stdin, text = false }, function(obj)
+            if obj.code ~= 0 or not obj.stdout or #obj.stdout == 0 then
+                if obj.stderr and #obj.stderr > 0 then
+                    vim.schedule(function()
+                        vim.notify_once(
+                            ("alt-img: %s failed: %s"):format(cmd[1], obj.stderr),
+                            vim.log.levels.DEBUG
+                        )
+                    end)
+                end
+                on_done(nil)
+            else
+                on_done(obj.stdout)
+            end
+        end)
+    end)
+    if not ok then
+        on_done(nil)
+    end
+end
+
 ---Normalize magick's sixel DCS introducer so it matches `img2sixel`'s
 ---output, and what most sixel terminals actually render correctly.
 ---
@@ -189,6 +219,68 @@ function M.crop_resized_to_sixel(png_bytes, full_w_px, full_h_px, x_px, y_px, w_
     return normalize_sixel_introducer(
         run({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
     )
+end
+
+-- ---------------------------------------------------------------------
+-- Async variants (vim.system callback form).
+--
+-- The sync entry points above all block via `:wait()` — fine for the
+-- main render path (the sync block is wrapped in `is_drawing` so timer
+-- ticks won't re-enter), but bad for background pre-encoding where the
+-- main thread should stay responsive while magick runs. The async
+-- variants spawn the subprocess and return immediately; on_done fires
+-- from vim.schedule when the subprocess exits, so the main thread is
+-- only briefly busy at start (spawn) and end (callback dispatch + cache
+-- write). Mouse-follow, scroll, and other autocmd-driven work proceed
+-- in parallel with the magick subprocess.
+-- ---------------------------------------------------------------------
+
+---Async: decode + resize + PNG re-encode. on_done(png_bytes_or_nil).
+function M.encode_png_resized_async(png_bytes, w_px, h_px, on_done)
+    local bin = M.binary()
+    if not bin then
+        return on_done(nil)
+    end
+    local geom = string.format("%dx%d!", w_px, h_px)
+    run_async({ bin, "-", "-sample", geom, "png:-" }, png_bytes, on_done)
+end
+
+---Async: crop a PNG sub-rectangle. on_done(cropped_png_or_nil).
+function M.crop_to_png_async(png_bytes, x_px, y_px, w_px, h_px, on_done)
+    local bin = M.binary()
+    if not bin then
+        return on_done(nil)
+    end
+    local geom = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
+    run_async({ bin, "-", "-crop", geom, "png:-" }, png_bytes, on_done)
+end
+
+---Async: decode + resize + sixel-encode. on_done(sixel_dcs_or_nil).
+function M.encode_sixel_from_png_resized_async(png_bytes, w_px, h_px, on_done, colors)
+    local bin = M.binary()
+    if not bin then
+        return on_done(nil)
+    end
+    local geom = string.format("%dx%d!", w_px, h_px)
+    local def = "sixel:colors=" .. tostring(colors or 256)
+    run_async({ bin, "-", "-sample", geom, "-define", def, "sixel:-" }, png_bytes, function(out)
+        on_done(normalize_sixel_introducer(out))
+    end)
+end
+
+---Async: decode + resize-to-target + crop-of-target + sixel-encode in one
+---subprocess. on_done(sixel_dcs_or_nil).
+function M.crop_resized_to_sixel_async(png_bytes, full_w_px, full_h_px, x_px, y_px, w_px, h_px, on_done, colors)
+    local bin = M.binary()
+    if not bin then
+        return on_done(nil)
+    end
+    local sample = string.format("%dx%d!", full_w_px, full_h_px)
+    local crop = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
+    local def = "sixel:colors=" .. tostring(colors or 256)
+    run_async({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes, function(out)
+        on_done(normalize_sixel_introducer(out))
+    end)
 end
 
 return M

@@ -258,6 +258,97 @@ function M._build_at(id, screen_pos)
     return build_at(id, screen_pos)
 end
 
+-- Public: populate the encoding cache for `id` at `src` *asynchronously*,
+-- via vim.system's callback form (no .wait()). Returns immediately.
+-- on_done() fires from vim.schedule when the cache is populated (or the
+-- magick subprocess failed — silently in that case; the on-demand
+-- _build_at path will retry sync).
+--
+-- Used by _core/precompute.lua to warm crop variants without blocking
+-- the main thread, so mouse-follow / scroll / typing stay responsive
+-- while pre-encoding runs.
+--
+-- Falls back to the synchronous _build_at when magick isn't on PATH —
+-- the pure-Lua decode/resize/encode chain is CPU-bound on the main
+-- thread and there's no async equivalent without offloading to a
+-- libuv thread (deferred until needed).
+function M._precompute_async(id, src, on_done)
+    local s = state[id]
+    if not s or not src then
+        return on_done()
+    end
+
+    if not magick.binary() then
+        pcall(build_at, id, { row = 1, col = 1, src = src })
+        return on_done()
+    end
+
+    local opts = s.opts
+    if not opts.width or not opts.height then
+        return on_done()
+    end
+
+    util.query_cell_size()
+    local cw, ch = util.cell_pixel_size()
+
+    local is_full = src.x == 0 and src.y == 0 and src.w == opts.width and src.h == opts.height
+
+    if is_full then
+        if s.full_png and s.full_png_b64 then
+            return on_done()
+        end
+        magick.encode_png_resized_async(s.data, opts.width * cw, opts.height * ch, function(png_bytes)
+            if png_bytes and #png_bytes > 0 then
+                s.full_png = png_bytes
+                s.full_png_b64 = vim.base64.encode(png_bytes)
+            end
+            on_done()
+        end)
+        return
+    end
+
+    -- Cropped variant. Need full_png cached to crop from.
+    local key = string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
+    s.png_cache_by_src = s.png_cache_by_src or {}
+    s.png_cache_by_src_order = s.png_cache_by_src_order or {}
+    if s.png_cache_by_src[key] then
+        return on_done()
+    end
+
+    local function do_crop()
+        local x_px = src.x * cw
+        local y_px = src.y * ch
+        local w_px = src.w * cw
+        local h_px = src.h * ch
+        magick.crop_to_png_async(s.full_png, x_px, y_px, w_px, h_px, function(cropped_png)
+            if cropped_png and #cropped_png > 0 then
+                local entry = { png = cropped_png, b64 = vim.base64.encode(cropped_png) }
+                lru.put(
+                    s.png_cache_by_src,
+                    s.png_cache_by_src_order,
+                    key,
+                    entry,
+                    _config.read().crop_cache_size
+                )
+            end
+            on_done()
+        end)
+    end
+
+    if s.full_png and #s.full_png > 0 then
+        do_crop()
+    else
+        magick.encode_png_resized_async(s.data, opts.width * cw, opts.height * ch, function(png_bytes)
+            if not png_bytes or #png_bytes == 0 then
+                return on_done()
+            end
+            s.full_png = png_bytes
+            s.full_png_b64 = vim.base64.encode(png_bytes)
+            do_crop()
+        end)
+    end
+end
+
 -- Closure factory: produces a position resolver for placement `id` that the
 -- render coordinator can call without knowing about provider internals.
 -- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,

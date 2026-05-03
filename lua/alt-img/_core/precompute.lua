@@ -169,9 +169,16 @@ end
 ---include numeric .width and .height). Cancels any existing precompute
 ---for this placement first. No-op when:
 ---  * `vim.g.alt_img.precompute_crops` is false
----  * the provider doesn't expose `_build_at`
+---  * the provider exposes neither `_precompute_async` nor `_build_at`
 ---  * opts.width / opts.height is missing or non-numeric
 ---  * the variation list is empty
+---
+---When the provider exposes `_precompute_async`, magick subprocesses
+---spawn in parallel (up to `precompute_max_concurrent`) and the main
+---thread stays free during the wait. Falls back to synchronous
+---`_build_at` (one variant per timer tick) when async isn't available
+---— mostly the case for non-magick configs where the build path is
+---pure-Lua and CPU-bound on the main thread.
 ---@param provider table provider module (iterm2 / sixel)
 ---@param id any placement id
 ---@param opts table canonical opts (with width, height)
@@ -182,7 +189,9 @@ function M.start(provider, id, opts)
     if cfg.precompute_crops == false then
         return
     end
-    if type(provider._build_at) ~= "function" then
+    local has_async = type(provider._precompute_async) == "function"
+    local has_sync = type(provider._build_at) == "function"
+    if not has_async and not has_sync then
         return
     end
 
@@ -209,6 +218,10 @@ function M.start(provider, id, opts)
     if type(idle_threshold_ms) ~= "number" or idle_threshold_ms < 0 then
         idle_threshold_ms = 500
     end
+    local max_concurrent = cfg.precompute_max_concurrent
+    if type(max_concurrent) ~= "number" or max_concurrent < 1 then
+        max_concurrent = 2
+    end
     local notify = cfg.precompute_notify == true
 
     local total = #variations
@@ -216,51 +229,96 @@ function M.start(provider, id, opts)
     if notify then
         vim.schedule(function()
             vim.notify(
-                string.format("alt-img: precomputing %d crop variants", total),
+                string.format(
+                    "alt-img: precomputing %d crop variants (%s)",
+                    total,
+                    has_async and "async" or "sync"
+                ),
                 vim.log.levels.INFO
             )
         end)
     end
 
+    local timer_key = key(provider, id)
     local idx = 1
-    -- First arg to timer:start is the initial delay (ms before first
-    -- callback). Use start_delay_ms so the timer doesn't fire the moment
-    -- set() returns — see config comment for rationale.
+    local in_flight = 0
+    local done_count = 0
+
+    -- `active[timer_key] == timer` is the canonical "still alive" check.
+    -- M.cancel and a restart via M.start both replace or clear that
+    -- entry, so any callback that fires after cancellation just bows out.
+    local function maybe_finish()
+        if active[timer_key] ~= timer then
+            return
+        end
+        if done_count >= total then
+            if not timer:is_closing() then
+                timer:stop()
+                timer:close()
+            end
+            active[timer_key] = nil
+            if notify then
+                local elapsed_ms = (vim.uv.hrtime() - started_ns) / 1e6
+                vim.notify(
+                    string.format(
+                        "alt-img: precompute done (%d variants, %.0f ms wall)",
+                        total,
+                        elapsed_ms
+                    ),
+                    vim.log.levels.INFO
+                )
+            end
+        end
+    end
+
     timer:start(
         start_delay_ms,
         interval,
         vim.schedule_wrap(function()
-            if idx > #variations then
-                M.cancel(provider, id)
-                if notify then
-                    local elapsed_ms = (vim.uv.hrtime() - started_ns) / 1e6
-                    vim.notify(
-                        string.format(
-                            "alt-img: precompute done (%d variants, %.0f ms wall)",
-                            total,
-                            elapsed_ms
-                        ),
-                        vim.log.levels.INFO
-                    )
-                end
-                return
+            if active[timer_key] ~= timer then
+                return -- cancelled or replaced
             end
-            -- Provider may have been removed under us (test reload, del
-            -- without explicit cancel). Stop quietly.
-            if type(provider._build_at) ~= "function" then
-                M.cancel(provider, id)
-                return
-            end
-            -- Throttle: defer if the user has been active recently. The
-            -- variation gets retried on the next timer tick.
+            -- Throttle: defer dispatches if the user has been active
+            -- recently. In-flight subprocesses keep running in the
+            -- background; we just don't start new ones.
             if user_recently_active(idle_threshold_ms) then
                 return
             end
-            local src = variations[idx]
-            idx = idx + 1
-            -- pcall: a build error for one variation must not poison the
-            -- timer or block subsequent variations.
-            pcall(provider._build_at, id, { row = 1, col = 1, src = src })
+
+            if has_async then
+                -- Dispatch up to max_concurrent. Each subprocess runs in
+                -- a separate OS process; the main thread is only briefly
+                -- busy at dispatch + completion-callback dispatch.
+                while in_flight < max_concurrent and idx <= total do
+                    local src = variations[idx]
+                    idx = idx + 1
+                    in_flight = in_flight + 1
+                    local ok = pcall(provider._precompute_async, id, src, function()
+                        in_flight = in_flight - 1
+                        done_count = done_count + 1
+                        maybe_finish()
+                    end)
+                    if not ok then
+                        -- pcall swallowed the error before _precompute_async
+                        -- registered its callback. Tally manually.
+                        in_flight = in_flight - 1
+                        done_count = done_count + 1
+                        maybe_finish()
+                    end
+                end
+            else
+                -- Sync fallback (no async path): one per tick to avoid
+                -- long blocks.
+                if idx > total then
+                    maybe_finish()
+                    return
+                end
+                local src = variations[idx]
+                idx = idx + 1
+                pcall(provider._build_at, id, { row = 1, col = 1, src = src })
+                done_count = done_count + 1
+                maybe_finish()
+            end
         end)
     )
 end

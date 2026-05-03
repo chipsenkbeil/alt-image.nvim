@@ -246,6 +246,92 @@ function M._build_at(id, screen_pos)
     return build_at(id, screen_pos)
 end
 
+-- Public: populate the encoding cache for `id` at `src` *asynchronously*,
+-- via vim.system's callback form (no .wait()). Returns immediately;
+-- on_done() fires from vim.schedule when the cache is populated.
+--
+-- See iterm2.lua:_precompute_async for the rationale. Falls back to
+-- synchronous _build_at when magick isn't on PATH (img2sixel + pure-Lua
+-- paths are sync-only).
+function M._precompute_async(id, src, on_done)
+    local s = state[id]
+    if not s or not src then
+        return on_done()
+    end
+
+    if not magick.binary() then
+        pcall(build_at, id, { row = 1, col = 1, src = src })
+        return on_done()
+    end
+
+    local opts = s.opts
+    if not opts.width or not opts.height then
+        return on_done()
+    end
+
+    util.query_cell_size()
+    local cw, ch = util.cell_pixel_size()
+    local scale = sixel_scale()
+
+    local is_full = src.x == 0 and src.y == 0 and src.w == opts.width and src.h == opts.height
+
+    if is_full then
+        if s.sixel_cache then
+            return on_done()
+        end
+        magick.encode_sixel_from_png_resized_async(
+            s.data,
+            opts.width * cw * scale,
+            opts.height * ch * scale,
+            function(sixel_bytes)
+                if sixel_bytes and #sixel_bytes > 0 then
+                    s.sixel_cache = sixel_bytes
+                end
+                on_done()
+            end
+        )
+        return
+    end
+
+    -- Cropped variant. crop_resized_to_sixel does decode + resize + crop +
+    -- sixel encode in one subprocess, so no chained async dependency.
+    local key = string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
+    s.sixel_cache_by_src = s.sixel_cache_by_src or {}
+    s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
+    if s.sixel_cache_by_src[key] then
+        return on_done()
+    end
+
+    local x_px = src.x * cw * scale
+    local y_px = src.y * ch * scale
+    local w_px = src.w * cw * scale
+    local h_px = src.h * ch * scale
+    local full_w = opts.width * cw * scale
+    local full_h = opts.height * ch * scale
+
+    magick.crop_resized_to_sixel_async(
+        s.data,
+        full_w,
+        full_h,
+        x_px,
+        y_px,
+        w_px,
+        h_px,
+        function(sixel_bytes)
+            if sixel_bytes and #sixel_bytes > 0 then
+                lru.put(
+                    s.sixel_cache_by_src,
+                    s.sixel_cache_by_src_order,
+                    key,
+                    sixel_bytes,
+                    _config.read().crop_cache_size
+                )
+            end
+            on_done()
+        end
+    )
+end
+
 -- Closure factory: produces a position resolver for placement `id` that the
 -- render coordinator can call without knowing about provider internals.
 -- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,

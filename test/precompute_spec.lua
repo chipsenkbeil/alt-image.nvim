@@ -198,6 +198,74 @@ describe("alt-img._core.precompute scheduling", function()
         assert.equals(0, notifications)
     end)
 
+    it("uses _precompute_async when the provider exposes it", function()
+        vim.g.alt_img = { precompute_idle_threshold_ms = 0 }
+        local async_calls = 0
+        local sync_calls = 0
+        local fake = {
+            _precompute_async = function(_, _, on_done)
+                async_calls = async_calls + 1
+                -- Resolve immediately. Real magick exit is what triggers
+                -- on_done; for tests we just simulate fast completion.
+                on_done()
+            end,
+            _build_at = function()
+                sync_calls = sync_calls + 1
+            end,
+        }
+        precompute._set_last_activity_ns(0)
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        wait_until(function() return async_calls == 6 end, 2000)
+        assert.equals(6, async_calls)
+        assert.equals(0, sync_calls)
+        wait_until(function() return not precompute._is_active(fake, 1) end, 1000)
+        assert.is_false(precompute._is_active(fake, 1))
+    end)
+
+    it("respects precompute_max_concurrent for async dispatches", function()
+        vim.g.alt_img = {
+            precompute_idle_threshold_ms = 0,
+            precompute_max_concurrent = 2,
+        }
+        local in_flight = 0
+        local peak = 0
+        local pending = {}
+        local fake = {
+            _precompute_async = function(_, _, on_done)
+                in_flight = in_flight + 1
+                if in_flight > peak then
+                    peak = in_flight
+                end
+                -- Defer resolution: collect callbacks; flush in batches.
+                table.insert(pending, function()
+                    in_flight = in_flight - 1
+                    on_done()
+                end)
+            end,
+        }
+        precompute._set_last_activity_ns(0)
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        -- Let dispatcher fire a few times until pending fills to cap.
+        wait_until(function() return #pending >= 2 end, 1500)
+        -- Peak so far must not exceed cap.
+        assert.is_true(peak >= 1, "expected at least one dispatch")
+        assert.is_true(peak <= 2, "expected peak<=2, got " .. peak)
+        -- Resolve everything to let completion run.
+        local function flush()
+            local cbs = pending
+            pending = {}
+            for _, cb in ipairs(cbs) do
+                cb()
+            end
+        end
+        for _ = 1, 10 do
+            flush()
+            vim.wait(60, function() return #pending >= 1 end)
+        end
+        flush()
+        wait_until(function() return not precompute._is_active(fake, 1) end, 2000)
+    end)
+
     it("start() cancels prior precompute for the same (provider, id)", function()
         local calls_first = 0
         local fake_first = { _build_at = function() calls_first = calls_first + 1 end }
