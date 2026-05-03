@@ -362,7 +362,25 @@ local function mark_all_dirty_and_flush()
     vim.o.termsync = false
     local ok, err = pcall(function()
         util.term_send(SYNC_START)
-        vim.cmd("redraw")
+        -- :mode (force-redraw with screen clear) instead of :redraw
+        -- (incremental) for two reasons:
+        --
+        --   1. It refreshes w_lines (same as :redraw) so screenpos()
+        --      returns fresh rows for buffer placements with virt_lines.
+        --
+        --   2. It also clears the framebuffer (CSI 2J + repaint), which
+        --      evicts terminal-side image pixels that an incremental
+        --      :redraw would leave behind. relative=ui placements
+        --      especially need this: their pixels are at absolute screen
+        --      coords, and when nvim's TUI uses terminal scroll commands
+        --      to optimize a buffer scroll, iTerm2's image plane scrolls
+        --      along with the text and leaves stale image pixels at the
+        --      scrolled-to position. relative=editor / relative=buffer
+        --      placements get their old cells repainted by the natural
+        --      redraw and don't strictly need the clear, but the cost
+        --      is a single extra screen-worth of cell bytes — negligible
+        --      against typical sixel/OSC-1337 image payloads.
+        vim.cmd.mode()
 
         -- Sort placements by zindex (ascending) so higher-z emits last
         -- and paints on top.
