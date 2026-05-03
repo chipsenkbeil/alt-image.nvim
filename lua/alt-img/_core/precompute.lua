@@ -35,6 +35,22 @@
 --   runs but late variants evict early ones, defeating the cache-warm
 --   purpose.
 --
+-- Activity throttle:
+--   Each variation runs on the main Lua thread (the provider's
+--   `_build_at` calls into pure-Lua decoders / `vim.system():wait()` for
+--   magick). To avoid competing with scroll/typing for cycles, the
+--   timer callback skips itself if the user has been active within the
+--   last `precompute_idle_threshold_ms` milliseconds (CursorMoved,
+--   TextChanged, WinScrolled, mode changes, …). The skipped variations
+--   retry on the next tick. Set the threshold to 0 to disable
+--   throttling.
+--
+-- Notifications:
+--   `vim.g.alt_img.precompute_notify = true` emits a vim.notify on
+--   start (with the variation count) and on completion (with elapsed
+--   wall time). Useful for diagnosing whether perceived editor lag
+--   correlates with background precompute work. Off by default.
+--
 -- Disable:
 --   `vim.g.alt_img.precompute_crops = false` skips scheduling. Existing
 --   behaviour (encode-on-demand on first scroll) restored.
@@ -51,8 +67,42 @@ local M = {}
 -- Active precompute timers, keyed by tostring(provider) .. ":" .. tostring(id).
 local active = {}
 
+-- Activity tracking: `last_activity_ns` is the result of `vim.uv.hrtime()`
+-- at the time of the most recent user-visible event (cursor move, text
+-- change, scroll, mode change). The precompute timer compares this
+-- against the current time to decide whether to defer the next variation.
+local last_activity_ns = 0
+
+local AUGROUP = vim.api.nvim_create_augroup("alt-img.precompute", { clear = true })
+vim.api.nvim_create_autocmd({
+    "CursorMoved",
+    "CursorMovedI",
+    "TextChanged",
+    "TextChangedI",
+    "WinScrolled",
+    "ModeChanged",
+    "InsertEnter",
+    "InsertLeave",
+}, {
+    group = AUGROUP,
+    callback = function()
+        last_activity_ns = vim.uv.hrtime()
+    end,
+})
+
 local function key(provider, id)
     return tostring(provider) .. ":" .. tostring(id)
+end
+
+local function user_recently_active(threshold_ms)
+    if not threshold_ms or threshold_ms <= 0 then
+        return false
+    end
+    if last_activity_ns == 0 then
+        return false -- never marked active yet
+    end
+    local idle_ns = vim.uv.hrtime() - last_activity_ns
+    return idle_ns < threshold_ms * 1e6
 end
 
 -- Build the list of vertical-only crop variations for an image of (W, H)
@@ -125,9 +175,25 @@ function M.start(provider, id, opts)
     end
     active[key(provider, id)] = timer
 
-    local interval = (cfg.precompute_interval_ms or 30)
+    local interval = cfg.precompute_interval_ms
     if type(interval) ~= "number" or interval < 1 then
         interval = 30
+    end
+    local idle_threshold_ms = cfg.precompute_idle_threshold_ms
+    if type(idle_threshold_ms) ~= "number" or idle_threshold_ms < 0 then
+        idle_threshold_ms = 200
+    end
+    local notify = cfg.precompute_notify == true
+
+    local total = #variations
+    local started_ns = vim.uv.hrtime()
+    if notify then
+        vim.schedule(function()
+            vim.notify(
+                string.format("alt-img: precomputing %d crop variants", total),
+                vim.log.levels.INFO
+            )
+        end)
     end
 
     local idx = 1
@@ -137,12 +203,28 @@ function M.start(provider, id, opts)
         vim.schedule_wrap(function()
             if idx > #variations then
                 M.cancel(provider, id)
+                if notify then
+                    local elapsed_ms = (vim.uv.hrtime() - started_ns) / 1e6
+                    vim.notify(
+                        string.format(
+                            "alt-img: precompute done (%d variants, %.0f ms wall)",
+                            total,
+                            elapsed_ms
+                        ),
+                        vim.log.levels.INFO
+                    )
+                end
                 return
             end
             -- Provider may have been removed under us (test reload, del
             -- without explicit cancel). Stop quietly.
             if type(provider._build_at) ~= "function" then
                 M.cancel(provider, id)
+                return
+            end
+            -- Throttle: defer if the user has been active recently. The
+            -- variation gets retried on the next timer tick.
+            if user_recently_active(idle_threshold_ms) then
                 return
             end
             local src = variations[idx]
@@ -161,6 +243,12 @@ end
 ---@return boolean
 function M._is_active(provider, id)
     return active[key(provider, id)] ~= nil
+end
+
+---Test hook: force last_activity_ns to a value. Pass nil/0 to reset.
+---@param ns? integer
+function M._set_last_activity_ns(ns)
+    last_activity_ns = ns or 0
 end
 
 return M

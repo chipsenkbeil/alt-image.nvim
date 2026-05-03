@@ -133,6 +133,71 @@ describe("alt-img._core.precompute scheduling", function()
         assert.is_false(precompute._is_active(fake, 1))
     end)
 
+    it("skips work while user is recently active (throttle)", function()
+        local calls = 0
+        local fake = { _build_at = function() calls = calls + 1 end }
+        -- Simulate "user just hit a key" — well within the default 200 ms threshold.
+        precompute._set_last_activity_ns(vim.uv.hrtime())
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        -- Even after multiple timer fires, no work should land while we
+        -- keep updating last_activity_ns inside the threshold window.
+        local function refresh_activity()
+            precompute._set_last_activity_ns(vim.uv.hrtime())
+        end
+        local deadline = vim.uv.now() + 250
+        while vim.uv.now() < deadline do
+            refresh_activity()
+            vim.wait(20, function() return false end)
+        end
+        assert.equals(0, calls)
+        -- Now go idle: stop refreshing and let the threshold lapse.
+        precompute._set_last_activity_ns(0) -- "never active"
+        wait_until(function() return calls == 6 end, 2000)
+        assert.equals(6, calls)
+    end)
+
+    it("respects precompute_idle_threshold_ms = 0 (throttle off)", function()
+        vim.g.alt_img = { precompute_idle_threshold_ms = 0 }
+        local calls = 0
+        local fake = { _build_at = function() calls = calls + 1 end }
+        -- Mark recently active — but threshold=0 means "never throttle."
+        precompute._set_last_activity_ns(vim.uv.hrtime())
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        wait_until(function() return calls == 6 end, 2000)
+        assert.equals(6, calls)
+    end)
+
+    it("emits vim.notify on start + complete when precompute_notify is true", function()
+        vim.g.alt_img = { precompute_notify = true }
+        local notifications = {}
+        local orig_notify = vim.notify
+        vim.notify = function(msg, level)
+            notifications[#notifications + 1] = { msg = msg, level = level }
+        end
+        local fake = { _build_at = function() end }
+        precompute._set_last_activity_ns(0)
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        wait_until(function()
+            return #notifications >= 2
+        end, 2000)
+        vim.notify = orig_notify
+        assert.is_true(#notifications >= 2)
+        assert.matches("precomputing 6 crop variants", notifications[1].msg)
+        assert.matches("precompute done", notifications[#notifications].msg)
+    end)
+
+    it("does NOT notify when precompute_notify is false (default)", function()
+        local notifications = 0
+        local orig_notify = vim.notify
+        vim.notify = function() notifications = notifications + 1 end
+        local fake = { _build_at = function() end }
+        precompute._set_last_activity_ns(0)
+        precompute.start(fake, 1, { width = 4, height = 4 })
+        wait_until(function() return not precompute._is_active(fake, 1) end, 2000)
+        vim.notify = orig_notify
+        assert.equals(0, notifications)
+    end)
+
     it("start() cancels prior precompute for the same (provider, id)", function()
         local calls_first = 0
         local fake_first = { _build_at = function() calls_first = calls_first + 1 end }

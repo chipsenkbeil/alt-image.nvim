@@ -5,12 +5,14 @@
 -- via the global table:
 --
 --   vim.g.alt_img = {
---     magick                = { 'magick', 'convert' },   -- string | string[] | false
---     img2sixel             = 'img2sixel',               -- string | string[] | false
---     crop_cache_size       = 256,                       -- integer (LRU max per placement)
---     sixel_pixel_scale     = nil,                       -- integer override; nil = auto
---     precompute_crops      = true,                      -- background pre-encode on set()
---     precompute_interval_ms = 30,                       -- ms between precompute steps
+--     magick                       = { 'magick', 'convert' },  -- string | string[] | false
+--     img2sixel                    = 'img2sixel',              -- string | string[] | false
+--     crop_cache_size              = 256,                      -- integer (LRU max per placement)
+--     sixel_pixel_scale            = nil,                      -- integer override; nil = auto
+--     precompute_crops             = true,                     -- background pre-encode on set()
+--     precompute_interval_ms       = 30,                       -- ms between precompute steps
+--     precompute_idle_threshold_ms = 200,                      -- skip step if user active within this window
+--     precompute_notify            = false,                    -- vim.notify on precompute start/finish
 --   }
 --
 -- `sixel_pixel_scale` exists because iTerm2 (and a few others, e.g.
@@ -42,6 +44,8 @@
 ---@field sixel_pixel_scale? integer
 ---@field precompute_crops? boolean
 ---@field precompute_interval_ms? integer
+---@field precompute_idle_threshold_ms? integer
+---@field precompute_notify? boolean
 
 local M = {}
 
@@ -60,6 +64,15 @@ local DEFAULTS = {
     -- background magick / img2sixel work.
     precompute_crops = true,
     precompute_interval_ms = 30,
+    -- Skip a precompute step if the user has been active (CursorMoved,
+    -- TextChanged, WinScrolled, …) within this window. Pauses background
+    -- work during scroll/typing so the main thread isn't competing with
+    -- precompute encoding for cycles. Set to 0 to disable throttling.
+    precompute_idle_threshold_ms = 200,
+    -- vim.notify on precompute start / finish — useful for diagnosing
+    -- whether perceived lag correlates with background encode work.
+    -- Off by default to avoid log spam.
+    precompute_notify = false,
     -- sixel_pixel_scale is intentionally absent so callers can detect
     -- "user did not set this" (nil) and fall back to auto-detect via
     -- util.terminal_pixel_scale(). An explicit integer in vim.g.alt_img
