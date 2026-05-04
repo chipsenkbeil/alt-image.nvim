@@ -1,72 +1,64 @@
--- Top-level dispatcher. Detects which protocol the current terminal
--- supports and exposes the same set/get/del/_supported surface so that
---   vim.ui.img = require('alt-img')
--- works identically to vim.ui.img on a kitty-supporting terminal. Users who
--- want to skip detection require a specific provider directly:
---   vim.ui.img = require('alt-img.iterm2')
---   vim.ui.img = require('alt-img.sixel')
+---@type table?
+local instance = nil
+
+---Returns the cached provider, picking it from the autodetect matches
+---on first call. Errors if no candidate is supported.
+---@return table provider
+local function get_instance()
+    if not instance then
+        local autodetect = require("alt-img._core.autodetect")
+        for _, m in ipairs(autodetect.matches()) do
+            if m.ok then
+                instance = m.provider
+                break
+            end
+        end
+        assert(instance, "alt-img: no supported image protocol detected")
+    end
+    return instance
+end
 
 local M = {}
 
-local PROVIDERS = {
-    iterm2 = function()
-        return require("alt-img.iterm2")
-    end,
-    sixel = function()
-        return require("alt-img.sixel")
-    end,
-}
+---@param data_or_id string|integer image bytes (string) or existing id (integer)
+---@param opts? vim.ui.img.Opts
+---@return integer id
+function M.set(data_or_id, opts)
+    return get_instance().set(data_or_id, opts)
+end
 
-local DETECT_ORDER = { "iterm2", "sixel" }
+---@param id integer
+---@return vim.ui.img.Opts? opts
+function M.get(id)
+    return get_instance().get(id)
+end
 
-local cached_provider = nil
+---@param id integer
+---@return boolean found
+function M.del(id)
+    return get_instance().del(id)
+end
 
-local function detect()
-    for _, name in ipairs(DETECT_ORDER) do
-        local p = PROVIDERS[name]()
-        if p._supported({ timeout = 200 }) then
-            return p
+---@private
+---@param opts? { timeout?: integer }
+---@return boolean supported
+---@return string? msg
+function M._supported(opts)
+    local autodetect = require("alt-img._core.autodetect")
+    local matches = autodetect.matches(opts)
+    for _, m in ipairs(matches) do
+        if m.ok then
+            return true
         end
     end
-    error(
-        "alt-img: no supported image protocol detected. "
-            .. 'Set vim.ui.img = require("alt-img.iterm2") or .sixel manually.'
-    )
-end
-
-function M._provider()
-    cached_provider = cached_provider or detect()
-    return cached_provider
-end
-
--- Test helper: clear the cached provider so a subsequent _provider() call
--- redetects from current env / vim.g.alt_img.
-function M._reset_provider_cache()
-    cached_provider = nil
-end
-
--- Forward the public API. We do this lazily so the provider isn't constructed
--- until first call (avoids running detection at require-time).
-function M.set(d, o)
-    return M._provider().set(d, o)
-end
-function M.get(id)
-    return M._provider().get(id)
-end
-function M.del(id)
-    return M._provider().del(id)
-end
-function M.refresh()
-    return M._provider().refresh()
-end
-
-function M._supported(o)
-    for _, name in ipairs(DETECT_ORDER) do
-        local p = PROVIDERS[name]()
-        local ok, msg = p._supported(o)
-        if ok then
-            return true, name .. ": " .. (msg or "")
+    local msgs = {}
+    for _, m in ipairs(matches) do
+        if m.msg then
+            table.insert(msgs, m.name .. ": " .. m.msg)
         end
+    end
+    if #msgs > 0 then
+        return false, table.concat(msgs, "; ")
     end
     return false
 end

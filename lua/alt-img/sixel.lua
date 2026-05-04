@@ -1,14 +1,3 @@
--- lua/alt-img/sixel.lua
--- Sixel image protocol provider, drop-in for vim.ui.img.
--- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
---   runtime/lua/vim/ui/img/_sixel.lua
---
--- Input is required to be PNG bytes — we match the upstream vim.ui.img
--- contract. Decode, optional resize, sixel-encode, cache per-placement, and
--- emit the DCS sequence. When `magick` is on PATH we route the entire
--- decode + resize + sixel-encode through one subprocess so the pure-Lua
--- decoder/inflater is bypassed (matters most when libz is missing).
-
 local util = require("alt-img._core.util")
 local tty = require("alt-img._core.tty")
 local png = require("alt-img._core.png")
@@ -17,31 +6,47 @@ local magick = require("alt-img._core.magick")
 local senc = require("alt-img.sixel._encode")
 local render = require("alt-img._core.render")
 local lru = require("alt-img._core.lru")
-local _config = require("alt-img._core.config")
+local config = require("alt-img._core.config")
 
 local M = {}
 
+---@type table<string, boolean>
 local KNOWN_SIXEL_TERMS = {
     foot = true,
     mlterm = true,
     contour = true,
 }
+---@type table<string, boolean>
 local SUPPORTING_TERM_PROGRAMS = {
     ["iTerm.app"] = true, -- iTerm2 v3.5+ supports sixel
     ["WezTerm"] = true,
 }
 
--- state[id] = { data = bytes, opts = canonical_opts, sixel_cache = string|nil,
---               sixel_cache_by_src = { [key]=string }, id = id }
+---@class alt-img.sixel.State
+---@field data string raw PNG bytes
+---@field opts vim.ui.img.Opts canonical opts
+---@field id integer placement id
+---@field resized_rgba string? RGBA pixel buffer after nearest-neighbor resize
+---@field resized_w integer? pixel width of resized buffer
+---@field resized_h integer? pixel height of resized buffer
+---@field sixel_cache string? cached full-image sixel DCS
+---@field sixel_cache_by_src table<string, string>? LRU map of crop key → sixel DCS
+---@field sixel_cache_by_src_order string[]? LRU insertion-order keys for sixel_cache_by_src
+
+---@type table<integer, alt-img.sixel.State>
 local state = {}
+---@type integer
 local next_id = 1
 
+---@return integer
 local function new_id()
     local id = next_id
     next_id = next_id + 1
     return id
 end
 
+---@param opts? vim.ui.img.Opts
+---@return vim.ui.img.Opts
 local function canonicalize(opts)
     opts = opts or {}
     -- relative defaults: if opts.buf is set, default to 'buffer'; else 'ui'.
@@ -67,10 +72,9 @@ local function canonicalize(opts)
 end
 
 ---For non-ui modes, derive width/height from PNG IHDR if not provided.
----Mutates opts in-place. Data is guaranteed PNG by the boundary check in
----M.set, so we read the IHDR unconditionally.
+---Mutates opts in-place.
 ---@param data string raw PNG bytes
----@param opts table canonical opts
+---@param opts vim.ui.img.Opts canonical opts
 local function derive_dims(data, opts)
     if opts.relative == "ui" or (opts.width and opts.height) then
         return
@@ -82,6 +86,8 @@ local function derive_dims(data, opts)
     opts.height = opts.height or math.ceil(px_h / cell_h)
 end
 
+---@param s alt-img.sixel.State
+---@return string rgba, integer w, integer h
 local function ensure_resized(s)
     if s.resized_rgba then
         return s.resized_rgba, s.resized_w, s.resized_h
@@ -98,19 +104,20 @@ local function ensure_resized(s)
     return rgba, w, h
 end
 
--- Read sixel_pixel_scale fresh on each build so toggling it in vim.g
--- without restarting takes effect on the next render. When the user
--- hasn't set an explicit value, fall back to util.terminal_pixel_scale()
--- which infers the scale from the CSI 14t/18t × 16t window-vs-cell
--- ratio (the same trick chafa uses). Clamp explicit values to >= 1.
+---Return the active sixel pixel scale factor (clamped to >= 1).
+---Reads config fresh on every call so runtime changes take effect.
+---@return integer
 local function sixel_scale()
-    local s = (_config.read() or {}).sixel_pixel_scale
+    local s = (config.read() or {}).sixel_pixel_scale
     if type(s) == "number" then
         return math.max(1, math.floor(s))
     end
     return util.terminal_pixel_scale()
 end
 
+---Build the full-image sixel DCS for placement `s`, caching the result.
+---@param s alt-img.sixel.State
+---@return string sixel
 local function build_sixel(s)
     if s.sixel_cache then
         return s.sixel_cache
@@ -145,10 +152,10 @@ local function build_sixel(s)
     return s.sixel_cache
 end
 
--- Build a sixel DCS for a sub-rectangle of the resized image. `src` is in
--- cell units; the carrier math operates in resized-target pixel space, so
--- the magick fast path uses `-sample WxH! -crop CWxCH+X+Y` to do everything
--- in one subprocess and skip the pure-Lua decode/resize/crop chain.
+---Build a sixel DCS for a sub-rectangle of the resized image.
+---@param s alt-img.sixel.State
+---@param src { x: integer, y: integer, w: integer, h: integer } crop rect in cell units
+---@return string sixel
 local function build_sixel_cropped(s, src)
     util.query_cell_size()
     local cw, ch = util.cell_pixel_size()
@@ -175,27 +182,30 @@ local function build_sixel_cropped(s, src)
     return senc.encode_sixel_dispatch(cropped, cw_px, ch_px)
 end
 
+---@param s alt-img.sixel.State
+---@param key string crop cache key
+---@return string?
 local function crop_cache_get(s, key)
     s.sixel_cache_by_src = s.sixel_cache_by_src or {}
     s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
     return lru.get(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key)
 end
 
+---@param s alt-img.sixel.State
+---@param key string crop cache key
+---@param value string sixel DCS bytes
 local function crop_cache_put(s, key, value)
     s.sixel_cache_by_src = s.sixel_cache_by_src or {}
     s.sixel_cache_by_src_order = s.sixel_cache_by_src_order or {}
-    lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value, _config.read().crop_cache_size)
+    lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, value, config.read().crop_cache_size)
 end
 
--- Build the full byte string we'd send for placement `id` at `screen_pos`.
--- Returns nil when the placement is unknown (caller skips the term_send).
---
--- Split out from _emit_at so the render coordinator can construct payloads
--- *outside* the Mode 2026 sync block: cache misses here can spawn img2sixel
--- / magick via vim.system():wait() (in build_sixel / build_sixel_cropped),
--- which yields the event loop. Inside the sync block that yield is a
--- footgun — the terminal can decide our SYNC frame has gone stale and
--- bail. Build first, term_send second.
+---Build the full byte string for placement `id` at `screen_pos`. Returns nil
+---when the placement is unknown. Split from emit_at so the render coordinator
+---can construct payloads outside the Mode 2026 sync block.
+---@param id integer
+---@param screen_pos { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }?
+---@return string? bytes
 local function build_at(id, screen_pos)
     local s = state[id]
     if not s then
@@ -231,29 +241,23 @@ local function build_at(id, screen_pos)
     return "\0277" .. "\027[?25l" .. cmove .. sixel .. "\0278" .. "\027[?25h"
 end
 
--- Public so _render can call us. Builds the sixel DCS payload and writes it.
-function M._emit_at(id, screen_pos)
+---Build the sixel DCS payload and write it to the terminal.
+---@param id integer
+---@param screen_pos { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }?
+local function emit_at(id, screen_pos)
     local bytes = build_at(id, screen_pos)
     if bytes then
         util.term_send(bytes)
     end
 end
 
--- Public: build only, no term_send. Called by _render in the pre-sync pass
--- so payload construction (and any subprocess yields it triggers on cache
--- miss) happens before SYNC_START.
-function M._build_at(id, screen_pos)
-    return build_at(id, screen_pos)
-end
-
--- Public: populate the encoding cache for `id` at `src` *asynchronously*,
--- via vim.system's callback form (no .wait()). Returns immediately;
--- on_done() fires from vim.schedule when the cache is populated.
---
--- See iterm2.lua:_precompute_async for the rationale. Falls back to
--- synchronous _build_at when magick isn't on PATH (img2sixel + pure-Lua
--- paths are sync-only).
-function M._precompute_async(id, src, on_done)
+---Warm the encoding cache for `id` at `src` asynchronously (no .wait()).
+---on_done() fires from vim.schedule when the cache is populated or skipped.
+---Falls back to synchronous build_at when magick is not on PATH.
+---@param id integer
+---@param src { x: integer, y: integer, w: integer, h: integer }?
+---@param on_done fun()
+local function precompute_async(id, src, on_done)
     local s = state[id]
     if not s or not src then
         return on_done()
@@ -309,35 +313,18 @@ function M._precompute_async(id, src, on_done)
     local full_w = opts.width * cw * scale
     local full_h = opts.height * ch * scale
 
-    magick.crop_resized_to_sixel_async(
-        s.data,
-        full_w,
-        full_h,
-        x_px,
-        y_px,
-        w_px,
-        h_px,
-        function(sixel_bytes)
-            if sixel_bytes and #sixel_bytes > 0 then
-                lru.put(
-                    s.sixel_cache_by_src,
-                    s.sixel_cache_by_src_order,
-                    key,
-                    sixel_bytes,
-                    _config.read().crop_cache_size
-                )
-            end
-            on_done()
+    magick.crop_resized_to_sixel_async(s.data, full_w, full_h, x_px, y_px, w_px, h_px, function(sixel_bytes)
+        if sixel_bytes and #sixel_bytes > 0 then
+            lru.put(s.sixel_cache_by_src, s.sixel_cache_by_src_order, key, sixel_bytes, config.read().crop_cache_size)
         end
-    )
+        on_done()
+    end)
 end
 
--- Closure factory: produces a position resolver for placement `id` that the
--- render coordinator can call without knowing about provider internals.
--- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,
--- possibly empty. For ui-mode, a single full-image src is emitted. For
--- editor/buffer modes, the carrier may shrink src to clip against window
--- bounds, and split into multiple entries (one per visible window).
+---Closure factory: produces a position resolver for placement `id`.
+---The returned function returns a list of `{ row, col, src? }` records.
+---@param id integer
+---@return fun(): { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }[]
 local function get_pos_for(id)
     return function()
         local s = state[id]
@@ -361,14 +348,18 @@ local function get_pos_for(id)
     end
 end
 
+---@param query_id integer
+---@return vim.ui.img.Opts?
+local function get_opts(query_id)
+    return state[query_id] and state[query_id].opts
+end
+
+---@param data_or_id string|integer image bytes (string) or existing id (integer)
+---@param opts? vim.ui.img.Opts
+---@return integer id
 function M.set(data_or_id, opts)
-    vim.validate({
-        data_or_id = { data_or_id, { "string", "number" } },
-        opts = { opts, "table", true },
-    })
-    if type(data_or_id) == "string" and not util.is_png_data(data_or_id) then
-        error("alt-img.sixel: data must be a PNG byte string (matches vim.ui.img)", 2)
-    end
+    vim.validate("data_or_id", data_or_id, { "string", "number" })
+    vim.validate("opts", opts, "table", true)
 
     if type(data_or_id) == "number" then
         -- Update path
@@ -376,30 +367,18 @@ function M.set(data_or_id, opts)
         if not s then
             error("alt-img.sixel: unknown id " .. tostring(data_or_id), 2)
         end
-        -- v1: don't support relative-changing updates. Preserve original relative
-        -- on partial-merge so canonicalize's default of 'ui' doesn't clobber it.
         local upd = canonicalize(opts)
         if not (opts and opts.relative) then
             upd.relative = s.opts.relative
         end
-        -- Explicit guard: if caller tries to change relative, error out.
-        if opts and opts.relative and opts.relative ~= s.opts.relative then
-            error(
-                string.format(
-                    "alt-img.sixel: cannot change relative on update (was %s, got %s); del and re-create instead",
-                    s.opts.relative,
-                    opts.relative
-                ),
-                2
-            )
-        end
-        -- Capture old dimensions BEFORE merge so we can detect if they actually changed.
+        -- Capture old relative and dimensions BEFORE merge.
+        local old_relative = s.opts.relative
         local old_w, old_h = s.opts.width, s.opts.height
         s.opts = vim.tbl_extend("force", s.opts, upd)
         -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
         derive_dims(s.data, s.opts)
         -- Only invalidate encoding caches when dimensions actually changed.
-        -- Position, row/col, zindex, pad, relative (ui-mode only) don't affect encoding.
+        -- Position, row/col, zindex, pad, relative don't affect encoding.
         local dims_changed = s.opts.width ~= old_w or s.opts.height ~= old_h
         if dims_changed then
             s.sixel_cache = nil -- dims changed -> may need re-encode
@@ -409,16 +388,28 @@ function M.set(data_or_id, opts)
             s.resized_w = nil
             s.resized_h = nil
         end
-        -- For carrier-managed placements, reposition the carrier so the resolved
-        -- screen pos reflects the new opts (otherwise the float stays put).
-        if s.opts.relative ~= "ui" then
-            require("alt-img._core.carrier").update(M, data_or_id, s.opts)
+        -- Manage carrier lifecycle across relative-mode transitions:
+        --   ui → editor/buffer: register a new carrier.
+        --   editor/buffer → ui: unregister the existing carrier.
+        --   editor/buffer → editor/buffer: update in place (carrier.update
+        --     handles kind swaps internally via unregister+re-register).
+        local carrier = require("alt-img._core.carrier")
+        if old_relative == "ui" and s.opts.relative ~= "ui" then
+            carrier.register(M, data_or_id, s.opts)
+        elseif old_relative ~= "ui" and s.opts.relative == "ui" then
+            carrier.unregister(M, data_or_id)
+        elseif s.opts.relative ~= "ui" then
+            carrier.update(M, data_or_id, s.opts)
         end
         -- Mark dirty; the position-diff in tick() drives clearing automatically.
-        render.invalidate(M, data_or_id)
+        render.invalidate(state[data_or_id], data_or_id)
         render.flush()
+        -- Restart precompute when dims changed (cache was just invalidated).
         if dims_changed then
-            require("alt-img._core.precompute").start(M, data_or_id, s.opts)
+            require("alt-img._core.precompute").start(state[data_or_id], data_or_id, s.opts, {
+                build_at = build_at,
+                precompute_async = precompute_async,
+            })
         end
         return data_or_id
     end
@@ -440,16 +431,25 @@ function M.set(data_or_id, opts)
         require("alt-img._core.carrier").register(M, id, state[id].opts)
     end
 
-    render.register(M, id, get_pos_for(id))
+    render.register(state[id], id, get_pos_for(id), {
+        emit_at = emit_at,
+        build_at = build_at,
+        get_opts = get_opts,
+    })
     -- Synchronous initial paint so callers (and tests) see the image immediately.
     render.flush()
     -- Schedule background pre-encoding of cropped variants (see
     -- _core/precompute.lua) so partial-visibility scrolls don't pay
     -- the magick / img2sixel cost in the foreground.
-    require("alt-img._core.precompute").start(M, id, opts_canonical)
+    require("alt-img._core.precompute").start(state[id], id, opts_canonical, {
+        build_at = build_at,
+        precompute_async = precompute_async,
+    })
     return id
 end
 
+---@param id integer
+---@return vim.ui.img.Opts? opts
 function M.get(id)
     local s = state[id]
     if not s then
@@ -458,13 +458,20 @@ function M.get(id)
     return vim.deepcopy(s.opts)
 end
 
+---@param id integer
+---@return boolean found
 function M.del(id)
     if id == math.huge then
         local any = next(state) ~= nil
-        for k, _ in pairs(state) do
-            require("alt-img._core.precompute").cancel(M, k)
-            require("alt-img._core.carrier").unregister(M, k)
-            render.unregister(M, k)
+        -- Capture tokens and keys before clearing state.
+        local to_cancel = {}
+        for k, s in pairs(state) do
+            to_cancel[#to_cancel + 1] = { token = s, k = k }
+        end
+        for _, entry in ipairs(to_cancel) do
+            require("alt-img._core.precompute").cancel(entry.token, entry.k)
+            require("alt-img._core.carrier").unregister(M, entry.k)
+            render.unregister(entry.token, entry.k)
         end
         state = {}
         if any then
@@ -475,38 +482,34 @@ function M.del(id)
     if not state[id] then
         return false
     end
-    require("alt-img._core.precompute").cancel(M, id)
+    local token = state[id]
+    require("alt-img._core.precompute").cancel(token, id)
     require("alt-img._core.carrier").unregister(M, id)
-    render.unregister(M, id)
+    render.unregister(token, id)
     state[id] = nil
     render.flush()
     return true
 end
 
--- Force every registered placement to re-emit on the next render tick.
--- Use after `:mode`, `:redraw!`, terminal-side clears, or any other event
--- that has wiped image bytes from the terminal compositor without an
--- accompanying nvim grid update. The position-equality elision in the
--- render loop otherwise assumes those pixels are still there.
-function M.refresh()
-    render.refresh()
-end
-
+---@private
+---@param opts? { timeout?: integer }
+---@return boolean supported
+---@return string? msg
 function M._supported(opts)
     opts = opts or {}
     if vim.env.TERM_PROGRAM == "Apple_Terminal" then
         return false, "Apple Terminal does not support sixel"
     end
     if vim.env.WT_SESSION then
-        return true, "WT_SESSION (Windows Terminal)"
+        return true
     end
     local tp = vim.env.TERM_PROGRAM
     if tp and SUPPORTING_TERM_PROGRAMS[tp] then
-        return true, "TERM_PROGRAM=" .. tp
+        return true
     end
     local term = vim.env.TERM or ""
     if term:find("sixel", 1, true) or KNOWN_SIXEL_TERMS[term] then
-        return true, "TERM=" .. term
+        return true
     end
     -- DA1 probe (CSI c) — response includes ;4 if sixel supported. The
     -- internal tty.query helper is self-contained, so the probe always
@@ -516,7 +519,9 @@ function M._supported(opts)
     local done, ok, msg = false, false, nil
     tty.query("\027[c", { timeout = timeout }, function(resp)
         if resp and resp:find(";4", 1, true) then
-            ok, msg = true, resp
+            ok = true
+        elseif resp then
+            msg = "DA1 response did not indicate sixel support: " .. resp
         end
         done = true
     end)
@@ -526,7 +531,10 @@ function M._supported(opts)
     return ok, msg
 end
 
--- Expose state for testing only.
-M._state = state
+vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function()
+        M.del(math.huge)
+    end,
+})
 
 return M

@@ -1,16 +1,11 @@
--- alt-img internal wrapper around libsixel's `img2sixel` CLI.
--- Honors `vim.g.alt_img.img2sixel` per the alt-img config contract — see
--- `_core/config.lua`.
-
 local M = {}
-
-local _util = require("alt-img._core.util")
-local _config = require("alt-img._core.config")
 
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-    return _util.resolve_binary(_config.read().img2sixel)
+    local util = require("alt-img._core.util")
+    local config = require("alt-img._core.config")
+    return util.resolve_binary(config.read().img2sixel)
 end
 
 ---Run a subprocess synchronously and return stdout on success, nil on fail.

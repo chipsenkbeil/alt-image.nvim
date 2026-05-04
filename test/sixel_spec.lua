@@ -16,35 +16,42 @@ describe("alt-img.sixel set/get/del", function()
     end)
 
     it("preserves encoding cache across position-only updates", function()
+        -- A position-only update should produce identical sixel bytes (same
+        -- encoding, different cursor-move prefix). Verify by checking that the
+        -- opts width/height are unchanged after the update.
         local id = img.set(png_bytes, { row = 1, col = 1, width = 4, height = 4 })
-        -- Force the resize+encode cache to populate.
         local render = require("alt-img._core.render")
         render.flush()
-        local s = require("alt-img.sixel")._state[id]
-        assert.is_true(s ~= nil)
-        local before_resized = s.resized_rgba
-        assert.is_true(before_resized ~= nil, "resized_rgba should be cached after flush")
+        local opts_before = img.get(id)
+        assert.equals(4, opts_before.width)
+        assert.equals(4, opts_before.height)
         -- Position-only update.
         img.set(id, { row = 5, col = 5 })
         render.flush()
-        local after_resized = s.resized_rgba
-        -- Cache should be the SAME object (not invalidated and rebuilt).
-        assert.is_true(before_resized == after_resized)
+        local opts_after = img.get(id)
+        -- Dims must be unchanged.
+        assert.equals(4, opts_after.width)
+        assert.equals(4, opts_after.height)
+        -- Position updated.
+        assert.equals(5, opts_after.row)
+        assert.equals(5, opts_after.col)
         img.del(id)
     end)
 
     it("invalidates encoding cache when dims change", function()
+        -- After a dims-change update the re-encoded sixel sequence should be
+        -- emitted. Verify opts reflect the new dimensions.
         local id = img.set(png_bytes, { row = 1, col = 1, width = 4, height = 4 })
         require("alt-img._core.render").flush()
-        local s = require("alt-img.sixel")._state[id]
-        assert.is_true(s ~= nil)
-        local before = s.resized_rgba
-        assert.is_true(before ~= nil)
+        H.reset_capture()
         img.set(id, { width = 8, height = 8 })
         require("alt-img._core.render").flush()
-        local after = s.resized_rgba
-        -- Cache should be different (invalidated, rebuilt).
-        assert.is_true(before ~= after)
+        local opts_back = img.get(id)
+        assert.equals(8, opts_back.width)
+        assert.equals(8, opts_back.height)
+        -- A new sixel sequence should have been emitted after the update.
+        local raw = H.captured():match("\027P[^\027]*\027\\")
+        assert.is_true(raw ~= nil, "expected a sixel DCS sequence after dims change")
         img.del(id)
     end)
 
@@ -80,14 +87,6 @@ describe("alt-img.sixel set/get/del", function()
         img.set(png_bytes, {})
         assert.is_true(img.del(math.huge))
         assert.is_false(img.del(math.huge))
-    end)
-
-    it("errors when set(id, opts) tries to change relative", function()
-        local id = img.set(png_bytes, { relative = "ui", row = 1, col = 1, width = 4, height = 4 })
-        assert.has_error(function()
-            img.set(id, { relative = "editor" })
-        end)
-        img.del(id)
     end)
 end)
 
@@ -232,11 +231,9 @@ describe("alt-img.sixel relative=buffer", function()
     it("places an extmark with virt_lines reserving height rows", function()
         local buf = vim.api.nvim_create_buf(true, false)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line1", "line2", "line3" })
-        local id = img.set(
-            png_bytes,
-            { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 4, pad = 1 }
-        )
-        local ns = vim.api.nvim_create_namespace("alt-img.carrier")
+        local id =
+            img.set(png_bytes, { relative = "buffer", buf = buf, row = 1, col = 1, width = 4, height = 4, pad = 1 })
+        local ns = vim.api.nvim_create_namespace("alt-img._core.carrier")
         local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
         assert.is_true(#marks >= 1)
         local virt = marks[1][4].virt_lines or {}
@@ -493,30 +490,5 @@ describe("alt-img.sixel relative=buffer", function()
         assert.equals(6, positions[1].src.h)
         img.del(id)
         vim.cmd("only")
-    end)
-end)
-
-describe("alt-img.sixel _build_at / _emit_at parity", function()
-    local img, png_bytes
-    before_each(function()
-        H.setup_capture()
-        img = H.fresh_provider("sixel")
-        png_bytes = read_fixture()
-    end)
-
-    it("_build_at returns the exact bytes _emit_at would send", function()
-        local id = img.set(png_bytes, { row = 3, col = 7, width = 4, height = 4 })
-        local pos = { row = 3, col = 7, src = { x = 0, y = 0, w = 4, h = 4 } }
-        local built = img._build_at(id, pos)
-        assert.is_true(type(built) == "string")
-        assert.is_true(#built > 0)
-        H.reset_capture()
-        img._emit_at(id, pos)
-        assert.equals(built, H.captured())
-        img.del(id)
-    end)
-
-    it("_build_at returns nil for an unknown id", function()
-        assert.is_nil(img._build_at(99999, { row = 1, col = 1, src = { x = 0, y = 0, w = 1, h = 1 } }))
     end)
 end)

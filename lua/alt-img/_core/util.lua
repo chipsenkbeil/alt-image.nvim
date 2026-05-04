@@ -1,9 +1,3 @@
--- alt-img internal utilities
--- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
---   runtime/lua/vim/ui/img/_util.lua
-
-local tty = require("alt-img._core.tty")
-
 -- Cell pixel-size fallback defaults, used only when the CSI 16t query
 -- fails to elicit a response. Unix terminals inherit the X11/VGA 8x16
 -- fixed-font convention; Windows Terminal's Cascadia Mono ~12pt is
@@ -113,8 +107,9 @@ function M.term_send(data)
     vim.api.nvim_ui_send(data)
 end
 
----Load image data from file synchronously
----@return string data
+---Load image data from file synchronously.
+---@param file string path to the image file
+---@return string data raw file bytes
 function M.load_image_data(file)
     local fd, stat_err = vim.uv.fs_open(file, "r", 0)
     if not fd then
@@ -151,6 +146,7 @@ end
 function M._query_cell_size_csi16t()
     local timeout = 500
     local done = false
+    local tty = require("alt-img._core.tty")
     tty.query("\027[16t", { timeout = timeout }, function(resp)
         -- Response: ESC [ 6 ; <height_px> ; <width_px> t
         local h, w = resp:match("^\027%[6;(%d+);(%d+)t$")
@@ -177,6 +173,7 @@ end
 ---Query the terminal for cell pixel dimensions (synchronous via CSI 16t).
 ---Values are available immediately after this call. Cache is invalidated
 ---on VimResized and UIEnter so the next call re-queries.
+---@return nil
 function M.query_cell_size()
     if M._cell_size_queried then
         return
@@ -199,11 +196,15 @@ end
 --      mlterm on HiDPI X11/Wayland), the ratio reveals the scale.
 --      Stays at 1 on terminals that report consistently — including
 --      iTerm2/WezTerm, which is why we need (1) for them.
+---@type integer
 M._terminal_pixel_scale = 1
+---@type boolean
 M._terminal_pixel_scale_queried = false
 -- Per-source scale values for diagnostic surface. Either may be 0 to
 -- mean "no answer / not applicable on this terminal".
+---@type integer
 M._scale_from_osc1337 = 0
+---@type integer
 M._scale_from_geometry = 0
 
 -- Terminals known to implement iTerm2's `OSC 1337 ; ReportCellSize`. Reply
@@ -211,6 +212,7 @@ M._scale_from_geometry = 0
 -- (logical pixels) and scale is the screen scale factor — what we want.
 -- Sources: iTerm2 docs (origin), WezTerm docs (full IIP compat),
 -- Mintty/Konsole/Tabby (IIP support).
+---@type table<string, true>
 local OSC_1337_REPORT_CELL_SIZE_TERM_PROGRAMS = {
     ["iTerm.app"] = true,
     ["WezTerm"] = true,
@@ -237,6 +239,7 @@ function M._query_scale_osc1337()
     local timeout = 500
     local found = 0
     local done = false
+    local tty = require("alt-img._core.tty")
     tty.query("\027]1337;ReportCellSize\007", { timeout = timeout }, function(resp)
         local _h, _w, scale = (resp or ""):match("ReportCellSize=([%d%.]+);([%d%.]+);([%d%.]+)")
         if scale then
@@ -271,6 +274,7 @@ function M._query_scale_geometry_xtwinops()
     local timeout = 300
     local win_w, win_h, cols, rows
     local done14, done18 = false, false
+    local tty = require("alt-img._core.tty")
 
     tty.query("\027[14t", { timeout = timeout }, function(resp)
         local h, w = (resp or ""):match("^\027%[4;(%d+);(%d+)t$")
@@ -341,6 +345,7 @@ end
 -- Invalidate the cache on resize / UI re-attach. The augroup pattern
 -- with `clear = true` keeps reloads (tests, :Lazy reload) from stacking
 -- duplicate handlers.
+---@type integer
 local AUGROUP = vim.api.nvim_create_augroup("alt-img.util", { clear = true })
 vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
     group = AUGROUP,
@@ -353,6 +358,7 @@ vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
 -- Cached executable lookups for external tools (magick, convert, img2sixel).
 -- The cache survives the life of the Neovim session; tests that mock
 -- `vim.fn.executable` call `_reset_executable_cache()` to invalidate it.
+---@type table<string, boolean>
 local _executable_cache = {}
 
 ---Return true if `name` is on $PATH, caching the result.
@@ -366,6 +372,7 @@ function M._executable(name)
 end
 
 ---Reset the cached executable lookups (test hook).
+---@return nil
 function M._reset_executable_cache()
     for k in pairs(_executable_cache) do
         _executable_cache[k] = nil
@@ -399,6 +406,10 @@ function M.resolve_binary(cfg)
     return nil
 end
 
+---Generate a session-unique integer ID. Combines a 10-bit hash of the Neovim
+---PID (upper bits) with a per-session counter (lower bits) so IDs from
+---concurrent nvim instances are unlikely to collide.
+---@type fun(): integer
 M.generate_id = (function()
     local bit = require("bit")
     local NVIM_PID_BITS = 10
@@ -406,10 +417,7 @@ M.generate_id = (function()
     local nvim_pid = 0
     local cnt = 30
 
-    ---Generate unique ID for this Neovim instance
-    ---@return integer id
     return function()
-        -- Generate a unique ID for this nvim instance (10 bits)
         if nvim_pid == 0 then
             local pid = vim.fn.getpid()
             nvim_pid = bit.band(bit.bxor(pid, bit.rshift(pid, 5), bit.rshift(pid, NVIM_PID_BITS)), 0x3FF)

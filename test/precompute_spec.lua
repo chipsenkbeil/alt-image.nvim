@@ -74,71 +74,91 @@ describe("alt-img._core.precompute scheduling", function()
         return vim.wait(timeout or 5000, predicate, 5)
     end
 
-    it("calls _build_at for every variation, then stops", function()
+    it("calls build_at for every variation, then stops", function()
         local calls = {}
-        local fake = {
-            _build_at = function(id, screen_pos)
+        local cb = {
+            build_at = function(id, screen_pos)
                 table.insert(calls, { id = id, src = screen_pos.src })
             end,
         }
-        precompute.start(fake, 1, { width = 4, height = 4 })
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
 
         -- Expect 2*(4-1) = 6 calls eventually.
-        wait_until(function() return #calls == 6 end, 2000)
+        wait_until(function()
+            return #calls == 6
+        end, 2000)
         assert.equals(6, #calls)
         -- Timer should self-cancel after the last variation.
-        wait_until(function() return not precompute._is_active(fake, 1) end, 500)
-        assert.is_false(precompute._is_active(fake, 1))
+        wait_until(function()
+            return not precompute._is_active("test-token-1", 1)
+        end, 500)
+        assert.is_false(precompute._is_active("test-token-1", 1))
     end)
 
     it("cancel stops further work mid-flight", function()
         local calls = 0
-        local fake = {
-            _build_at = function() calls = calls + 1 end,
+        local cb = {
+            build_at = function()
+                calls = calls + 1
+            end,
         }
-        precompute.start(fake, 1, { width = 4, height = 100 }) -- 198 variations
+        precompute.start("test-token-1", 1, { width = 4, height = 100 }, cb) -- 198 variations
         -- Let a couple of calls happen, then cancel.
-        wait_until(function() return calls >= 2 end, 500)
+        wait_until(function()
+            return calls >= 2
+        end, 500)
         local at_cancel = calls
-        precompute.cancel(fake, 1)
-        assert.is_false(precompute._is_active(fake, 1))
+        precompute.cancel("test-token-1", 1)
+        assert.is_false(precompute._is_active("test-token-1", 1))
         -- Wait briefly; calls should not advance after cancel.
-        vim.wait(100, function() return false end)
+        vim.wait(100, function()
+            return false
+        end)
         assert.equals(at_cancel, calls)
     end)
 
     it("does nothing when precompute_crops is false", function()
         vim.g.alt_img = { precompute_crops = false }
         local calls = 0
-        local fake = { _build_at = function() calls = calls + 1 end }
-        precompute.start(fake, 1, { width = 4, height = 4 })
-        vim.wait(100, function() return false end)
+        local cb = {
+            build_at = function()
+                calls = calls + 1
+            end,
+        }
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
+        vim.wait(100, function()
+            return false
+        end)
         assert.equals(0, calls)
-        assert.is_false(precompute._is_active(fake, 1))
+        assert.is_false(precompute._is_active("test-token-1", 1))
     end)
 
-    it("does nothing when provider has no _build_at", function()
-        local fake = { _emit_at = function() end } -- legacy provider
-        precompute.start(fake, 1, { width = 4, height = 4 })
-        assert.is_false(precompute._is_active(fake, 1))
+    it("does nothing when callbacks has no build_at", function()
+        local cb = { precompute_async = nil } -- no build_at
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
+        assert.is_false(precompute._is_active("test-token-1", 1))
     end)
 
     it("does nothing for missing dims", function()
-        local fake = { _build_at = function() end }
-        precompute.start(fake, 1, { width = nil, height = 4 })
-        assert.is_false(precompute._is_active(fake, 1))
-        precompute.start(fake, 1, { width = 4, height = nil })
-        assert.is_false(precompute._is_active(fake, 1))
-        precompute.start(fake, 1, nil)
-        assert.is_false(precompute._is_active(fake, 1))
+        local cb = { build_at = function() end }
+        precompute.start("test-token-1", 1, { width = nil, height = 4 }, cb)
+        assert.is_false(precompute._is_active("test-token-1", 1))
+        precompute.start("test-token-1", 1, { width = 4, height = nil }, cb)
+        assert.is_false(precompute._is_active("test-token-1", 1))
+        precompute.start("test-token-1", 1, nil, cb)
+        assert.is_false(precompute._is_active("test-token-1", 1))
     end)
 
     it("skips work while user is recently active (throttle)", function()
         local calls = 0
-        local fake = { _build_at = function() calls = calls + 1 end }
+        local cb = {
+            build_at = function()
+                calls = calls + 1
+            end,
+        }
         -- Simulate "user just hit a key" — well within the default 200 ms threshold.
         precompute._set_last_activity_ns(vim.uv.hrtime())
-        precompute.start(fake, 1, { width = 4, height = 4 })
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
         -- Even after multiple timer fires, no work should land while we
         -- keep updating last_activity_ns inside the threshold window.
         local function refresh_activity()
@@ -147,23 +167,33 @@ describe("alt-img._core.precompute scheduling", function()
         local deadline = vim.uv.now() + 250
         while vim.uv.now() < deadline do
             refresh_activity()
-            vim.wait(20, function() return false end)
+            vim.wait(20, function()
+                return false
+            end)
         end
         assert.equals(0, calls)
         -- Now go idle: stop refreshing and let the threshold lapse.
         precompute._set_last_activity_ns(0) -- "never active"
-        wait_until(function() return calls == 6 end, 2000)
+        wait_until(function()
+            return calls == 6
+        end, 2000)
         assert.equals(6, calls)
     end)
 
     it("respects precompute_idle_threshold_ms = 0 (throttle off)", function()
         vim.g.alt_img = { precompute_idle_threshold_ms = 0 }
         local calls = 0
-        local fake = { _build_at = function() calls = calls + 1 end }
+        local cb = {
+            build_at = function()
+                calls = calls + 1
+            end,
+        }
         -- Mark recently active — but threshold=0 means "never throttle."
         precompute._set_last_activity_ns(vim.uv.hrtime())
-        precompute.start(fake, 1, { width = 4, height = 4 })
-        wait_until(function() return calls == 6 end, 2000)
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
+        wait_until(function()
+            return calls == 6
+        end, 2000)
         assert.equals(6, calls)
     end)
 
@@ -174,9 +204,9 @@ describe("alt-img._core.precompute scheduling", function()
         vim.notify = function(msg, level)
             notifications[#notifications + 1] = { msg = msg, level = level }
         end
-        local fake = { _build_at = function() end }
+        local cb = { build_at = function() end }
         precompute._set_last_activity_ns(0)
-        precompute.start(fake, 1, { width = 4, height = 4 })
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
         wait_until(function()
             return #notifications >= 2
         end, 2000)
@@ -189,37 +219,45 @@ describe("alt-img._core.precompute scheduling", function()
     it("does NOT notify when precompute_notify is false (default)", function()
         local notifications = 0
         local orig_notify = vim.notify
-        vim.notify = function() notifications = notifications + 1 end
-        local fake = { _build_at = function() end }
+        vim.notify = function()
+            notifications = notifications + 1
+        end
+        local cb = { build_at = function() end }
         precompute._set_last_activity_ns(0)
-        precompute.start(fake, 1, { width = 4, height = 4 })
-        wait_until(function() return not precompute._is_active(fake, 1) end, 2000)
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
+        wait_until(function()
+            return not precompute._is_active("test-token-1", 1)
+        end, 2000)
         vim.notify = orig_notify
         assert.equals(0, notifications)
     end)
 
-    it("uses _precompute_async when the provider exposes it", function()
+    it("uses precompute_async when the callbacks expose it", function()
         vim.g.alt_img = { precompute_idle_threshold_ms = 0 }
         local async_calls = 0
         local sync_calls = 0
-        local fake = {
-            _precompute_async = function(_, _, on_done)
+        local cb = {
+            precompute_async = function(_, _, on_done)
                 async_calls = async_calls + 1
                 -- Resolve immediately. Real magick exit is what triggers
                 -- on_done; for tests we just simulate fast completion.
                 on_done()
             end,
-            _build_at = function()
+            build_at = function()
                 sync_calls = sync_calls + 1
             end,
         }
         precompute._set_last_activity_ns(0)
-        precompute.start(fake, 1, { width = 4, height = 4 })
-        wait_until(function() return async_calls == 6 end, 2000)
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
+        wait_until(function()
+            return async_calls == 6
+        end, 2000)
         assert.equals(6, async_calls)
         assert.equals(0, sync_calls)
-        wait_until(function() return not precompute._is_active(fake, 1) end, 1000)
-        assert.is_false(precompute._is_active(fake, 1))
+        wait_until(function()
+            return not precompute._is_active("test-token-1", 1)
+        end, 1000)
+        assert.is_false(precompute._is_active("test-token-1", 1))
     end)
 
     it("respects precompute_max_concurrent for async dispatches", function()
@@ -230,8 +268,8 @@ describe("alt-img._core.precompute scheduling", function()
         local in_flight = 0
         local peak = 0
         local pending = {}
-        local fake = {
-            _precompute_async = function(_, _, on_done)
+        local cb = {
+            precompute_async = function(_, _, on_done)
                 in_flight = in_flight + 1
                 if in_flight > peak then
                     peak = in_flight
@@ -244,40 +282,58 @@ describe("alt-img._core.precompute scheduling", function()
             end,
         }
         precompute._set_last_activity_ns(0)
-        precompute.start(fake, 1, { width = 4, height = 4 })
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb)
         -- Let dispatcher fire a few times until pending fills to cap.
-        wait_until(function() return #pending >= 2 end, 1500)
+        wait_until(function()
+            return #pending >= 2
+        end, 1500)
         -- Peak so far must not exceed cap.
         assert.is_true(peak >= 1, "expected at least one dispatch")
         assert.is_true(peak <= 2, "expected peak<=2, got " .. peak)
         -- Resolve everything to let completion run.
         local function flush()
-            local cbs = pending
+            local flush_cbs = pending
             pending = {}
-            for _, cb in ipairs(cbs) do
-                cb()
+            for _, flush_cb in ipairs(flush_cbs) do
+                flush_cb()
             end
         end
         for _ = 1, 10 do
             flush()
-            vim.wait(60, function() return #pending >= 1 end)
+            vim.wait(60, function()
+                return #pending >= 1
+            end)
         end
         flush()
-        wait_until(function() return not precompute._is_active(fake, 1) end, 2000)
+        wait_until(function()
+            return not precompute._is_active("test-token-1", 1)
+        end, 2000)
     end)
 
-    it("start() cancels prior precompute for the same (provider, id)", function()
+    it("start() cancels prior precompute for the same (token, id)", function()
         local calls_first = 0
-        local fake_first = { _build_at = function() calls_first = calls_first + 1 end }
-        precompute.start(fake_first, 1, { width = 4, height = 50 }) -- 98 variations
-        wait_until(function() return calls_first >= 1 end, 500)
+        local cb_first = {
+            build_at = function()
+                calls_first = calls_first + 1
+            end,
+        }
+        precompute.start("test-token-1", 1, { width = 4, height = 50 }, cb_first) -- 98 variations
+        wait_until(function()
+            return calls_first >= 1
+        end, 500)
         -- Restart with new dims; prior timer should be canceled.
         local calls_second = 0
-        local fake_second = { _build_at = function() calls_second = calls_second + 1 end }
-        precompute.start(fake_second, 1, { width = 4, height = 4 }) -- 6 variations
-        wait_until(function() return calls_second == 6 end, 2000)
+        local cb_second = {
+            build_at = function()
+                calls_second = calls_second + 1
+            end,
+        }
+        precompute.start("test-token-1", 1, { width = 4, height = 4 }, cb_second) -- 6 variations
+        wait_until(function()
+            return calls_second == 6
+        end, 2000)
         assert.equals(6, calls_second)
-        -- The first fake's call count should be bounded (timer was canceled
+        -- The first callback's call count should be bounded (timer was canceled
         -- when start() was called again on the same key). It's possible a
         -- callback was already in-flight when start() ran, so allow some
         -- slack — just assert it didn't run all 98.

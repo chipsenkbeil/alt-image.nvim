@@ -1,13 +1,13 @@
--- :checkhealth alt-img.sixel
 local M = {}
 
+---@return nil
 function M.check()
     local h = vim.health
     h.start("alt-img.sixel")
 
     local ok, msg = require("alt-img.sixel")._supported()
     if ok then
-        h.ok("Sixel protocol: supported" .. (msg and (" (" .. msg .. ")") or ""))
+        h.ok("Sixel protocol: supported")
     else
         h.error(
             "Sixel protocol: not detected. "

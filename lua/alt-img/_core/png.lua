@@ -216,10 +216,15 @@ local CL_ORDER = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1,
 local BitReader = {}
 BitReader.__index = BitReader
 
+---@param data string raw DEFLATE stream bytes
+---@return table BitReader instance
 function BitReader.new(data)
     return setmetatable({ data = data, pos = 1, bitpos = 0 }, BitReader)
 end
 
+---Read n bits from the stream in LSB-first order.
+---@param n integer number of bits to read
+---@return integer
 function BitReader:read(n)
     local val = 0
     local shift = 0
@@ -243,6 +248,7 @@ function BitReader:read(n)
     return val
 end
 
+---Discard remaining bits in the current byte, aligning to the next byte boundary.
 function BitReader:align()
     if self.bitpos > 0 then
         self.bitpos = 0
@@ -250,6 +256,13 @@ function BitReader:align()
     end
 end
 
+---Build a canonical Huffman decode table from an array of code lengths.
+---Returns a flat array keyed by `max_bits`-wide canonical code, each entry
+---`{ sym, len }`. Suitable for the peek-then-rewind decode strategy used by
+---`huffman_decode`.
+---@param lengths table<integer, integer> code lengths indexed 0..max_sym
+---@param max_sym integer highest symbol index
+---@return table decode table with field `max_bits`
 local function build_huffman(lengths, max_sym)
     local max_bits = 0
     for sym = 0, max_sym do
@@ -300,6 +313,11 @@ local function build_huffman(lengths, max_sym)
     return tbl
 end
 
+---Decode one symbol from `reader` using the prebuilt Huffman table.
+---Reads `max_bits` bits, looks up the symbol, then rewinds the unused bits.
+---@param reader table BitReader instance
+---@param tbl table decode table produced by `build_huffman`
+---@return integer symbol
 local function huffman_decode(reader, tbl)
     local max_bits = tbl.max_bits
     local code = reader:read(max_bits)
@@ -318,6 +336,12 @@ local function huffman_decode(reader, tbl)
     return entry.sym
 end
 
+---Pure-Lua DEFLATE inflater (RFC 1951). Handles stored blocks (btype=0),
+---fixed Huffman (btype=1), and dynamic Huffman (btype=2). Used when libz is
+---not available; strips the 2-byte zlib header and 4-byte Adler-32 trailer
+---before being called (see `M.decode`).
+---@param data string raw DEFLATE-compressed bytes (no zlib wrapper)
+---@return string decompressed bytes
 local function inflate(data)
     local reader = BitReader.new(data)
     local out = {}
@@ -451,6 +475,13 @@ local function inflate(data)
     return table.concat(out)
 end
 
+---Paeth predictor (PNG filter type 4, RFC 2083 section 6.6).
+---Returns whichever of a (left), b (up), or c (upper-left) is closest to
+---the linear prediction p = a + b - c.
+---@param a integer left sample
+---@param b integer up sample
+---@param c integer upper-left sample
+---@return integer predicted sample
 local function paeth(a, b, c)
     local p = a + b - c
     local pa = math.abs(p - a)
@@ -642,6 +673,9 @@ for i = 0, 255 do
     crc32_table[i] = c
 end
 
+---CRC-32 (poly 0xEDB88320, reflected/zlib variant) over a Lua string.
+---@param s string
+---@return integer unsigned 32-bit CRC
 local function crc32(s)
     local c = 0xFFFFFFFF
     for i = 1, #s do
@@ -651,6 +685,9 @@ local function crc32(s)
     return bit.bxor(c, 0xFFFFFFFF)
 end
 
+---Adler-32 checksum (zlib/PNG trailer).
+---@param s string
+---@return integer
 local function adler32(s)
     local a, b = 1, 0
     for i = 1, #s do
@@ -660,6 +697,9 @@ local function adler32(s)
     return b * 65536 + a
 end
 
+---Encode a 32-bit integer as a 4-byte big-endian string.
+---@param n integer
+---@return string
 local function be32(n)
     local b1 = math.floor(n / 0x1000000) % 0x100
     local b2 = math.floor(n / 0x10000) % 0x100
@@ -668,16 +708,28 @@ local function be32(n)
     return string.char(b1, b2, b3, b4)
 end
 
+---Encode a 16-bit integer as a 2-byte little-endian string (for stored-block headers).
+---@param n integer
+---@return string
 local function le16(n)
     return string.char(n % 0x100, math.floor(n / 0x100) % 0x100)
 end
 
+---Build a PNG chunk: length (4 B) + type (4 B) + data + CRC (4 B).
+---@param typ string 4-character chunk type (e.g. "IHDR", "IDAT")
+---@param data string chunk payload
+---@return string
 local function build_chunk(typ, data)
     local crc = crc32(typ .. data)
     return be32(#data) .. typ .. data .. be32(crc)
 end
 
 ---Wrap raw bytes as a zlib stored-block stream (used as the libz fallback).
+---Emits a 0x78 0x01 zlib header, one or more uncompressed stored blocks (each
+---up to 65535 bytes, per RFC 1951 section 3.2.4), and a trailing Adler-32.
+---The result is a valid zlib stream even though no compression is applied.
+---@param raw string uncompressed scanline data
+---@return string zlib-wrapped stored-block bytes
 local function zlib_store(raw)
     local parts = { "\120\1" } -- zlib header: 0x78, 0x01
     local n = #raw
@@ -703,7 +755,8 @@ end
 -- Try to load libz via LuaJIT FFI. On any failure (no FFI, no libz, ABI
 -- mismatch, runtime error) we leave libz_compress nil and fall back to the
 -- pure-Lua stored-block encoder.
-local libz_compress -- function(data, level) -> string|nil
+---@type (fun(data: string, level?: integer): string?)?
+local libz_compress
 
 local _libz_ok = pcall(function()
     local ffi = require("ffi")
@@ -745,6 +798,10 @@ if not _libz_ok then
     libz_compress = nil
 end
 
+---Compress `raw` with libz DEFLATE when available, otherwise fall back to
+---`zlib_store` (valid zlib stream, no compression).
+---@param raw string uncompressed bytes
+---@return string zlib-compressed bytes
 local function zlib_compress(raw)
     if libz_compress then
         local out = libz_compress(raw)

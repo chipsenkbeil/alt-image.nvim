@@ -1,7 +1,7 @@
 -- Self-contained terminal-query helpers. Lifted from neovim PR #39489
 -- (vim.tty.request) so the plugin does not depend on `vim.tty.*`,
 -- which is only present on the fork branch on most builds.
----@class altimg._tty
+---@class alt-img._core.TTY
 local M = {}
 
 ---Send `payload` to the host terminal and listen for `TermResponse`,

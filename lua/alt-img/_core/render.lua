@@ -32,18 +32,25 @@ local SYNC_START = "\027[?2026h"
 local SYNC_END = "\027[?2026l"
 local TICK_MS = 30
 
--- placements[key] = { provider, id, get_pos, redraw, last_positions, next_positions }
--- where last_positions / next_positions are lists of `{row, col, src}` records.
+---@type table<string, alt-img._core.render.Placement>
 local placements = {}
+---@type boolean
 local clear_pending = false
+---@type boolean
 local is_drawing = false
 
-local function key(provider, id)
-    return tostring(provider) .. ":" .. tostring(id)
+---@param token any
+---@param id integer|any
+---@return string
+local function key(token, id)
+    return tostring(token) .. ":" .. tostring(id)
 end
 
 -- Compare two position lists for structural equality. Treats nil and empty
 -- list as equal (both mean "not visible"). Handles the new `src` rect.
+---@param a? alt-img._core.render.Position[]
+---@param b? alt-img._core.render.Position[]
+---@return boolean
 local function positions_equal(a, b)
     if (a == nil) ~= (b == nil) then
         -- one is nil, the other is a list. They're equal only if the list is empty.
@@ -78,6 +85,7 @@ end
 -- the TTY buffer before our image bytes — no separate `:redraw` required.
 -- When need_clear is false, we don't dirty Neovim's grid in this tick, so
 -- there's nothing to flush before emitting.
+---@return nil
 local function tick()
     if is_drawing then
         return
@@ -143,8 +151,8 @@ local function tick()
 
     -- Sort emit_set by zindex (ascending) so higher-z emits last and paints on top.
     table.sort(emit_set, function(a, b)
-        local ao = (a.provider.get and a.provider.get(a.id)) or {}
-        local bo = (b.provider.get and b.provider.get(b.id)) or {}
+        local ao = (a.callbacks.get_opts and a.callbacks.get_opts(a.id)) or {}
+        local bo = (b.callbacks.get_opts and b.callbacks.get_opts(b.id)) or {}
         local az = ao.zindex or 0
         local bz = bo.zindex or 0
         if az ~= bz then
@@ -164,7 +172,7 @@ local function tick()
 
     -- Two-pass emission:
     --
-    --   Pass 1 (this loop, OUTSIDE the sync block): call provider._build_at
+    --   Pass 1 (this loop, OUTSIDE the sync block): call callbacks.build_at
     --   for each (placement, position) and collect the resulting byte
     --   strings. Cache misses here can spawn magick / img2sixel via
     --   vim.system():wait(); other helpers (util.query_cell_size) call
@@ -192,13 +200,13 @@ local function tick()
     local payloads = {}
     for _, p in ipairs(emit_set) do
         for _, pos in ipairs(p.next_positions or {}) do
-            if p.provider._build_at then
-                local bytes = p.provider._build_at(p.id, pos)
+            if p.callbacks.build_at then
+                local bytes = p.callbacks.build_at(p.id, pos)
                 if bytes then
                     payloads[#payloads + 1] = { bytes = bytes }
                 end
             else
-                payloads[#payloads + 1] = { provider = p.provider, id = p.id, pos = pos }
+                payloads[#payloads + 1] = { callbacks = p.callbacks, id = p.id, pos = pos }
             end
         end
         p.last_positions = p.next_positions
@@ -220,7 +228,7 @@ local function tick()
             if item.bytes then
                 util.term_send(item.bytes)
             else
-                item.provider._emit_at(item.id, item.pos)
+                item.callbacks.emit_at(item.id, item.pos)
             end
         end
     end)
@@ -239,25 +247,36 @@ end
 
 -- Public ---------------------------------------------------------------
 
-function M.register(provider, id, get_pos)
-    placements[key(provider, id)] = {
-        provider = provider,
+---@param token any opaque identity
+---@param id integer
+---@param get_pos fun(id: integer): table[]
+---@param callbacks { emit_at: fun(id, pos), build_at?: fun(id, pos): string?, get_opts?: fun(id): table? }
+function M.register(token, id, get_pos, callbacks)
+    assert(
+        type(callbacks) == "table" and type(callbacks.emit_at) == "function",
+        "render.register requires callbacks.emit_at"
+    )
+    placements[key(token, id)] = {
+        token = token,
         id = id,
         get_pos = get_pos,
+        callbacks = callbacks,
         redraw = true,
         last_positions = nil,
     }
 end
 
-function M.unregister(provider, id)
-    if placements[key(provider, id)] then
-        placements[key(provider, id)] = nil
-        clear_pending = true
-    end
+---@param token any
+---@param id integer
+function M.unregister(token, id)
+    placements[key(token, id)] = nil
+    clear_pending = true
 end
 
-function M.invalidate(provider, id)
-    local p = placements[key(provider, id)]
+---@param token any
+---@param id integer
+function M.invalidate(token, id)
+    local p = placements[key(token, id)]
     if p then
         p.redraw = true
     end
@@ -270,6 +289,7 @@ end
 -- (which keeps mouse/typing from re-pushing every tick) treats stale image
 -- bytes as "still there"; this clears that assumption by nulling each
 -- placement's last_positions, so the next tick sees a movement and re-emits.
+---@return nil
 function M.refresh()
     for _, p in pairs(placements) do
         p.last_positions = nil
@@ -280,6 +300,7 @@ end
 
 -- Synchronously run a tick. Used by callers that need immediate emission
 -- (e.g. set() from tests). Emission completes before this returns.
+---@return nil
 function M.flush()
     tick()
 end
@@ -292,6 +313,7 @@ end
 -- `vim.system():wait()` yields the event loop and lets the timer's tick
 -- spawn extra subprocesses inside the benchmark's timing window, polluting
 -- `subprocess_count` measurements.
+---@type vim.uv.Timer?
 local timer = vim.uv.new_timer()
 if timer then
     timer:start(
@@ -310,6 +332,7 @@ local AUGROUP = vim.api.nvim_create_augroup("alt-img.render", { clear = true })
 -- equality elision so typing/cursor-movement that doesn't actually move
 -- a placement re-emits zero bytes. Used for hot autocmds (TextChanged,
 -- CursorMoved).
+---@return nil
 local function mark_all_dirty()
     for _, p in pairs(placements) do
         p.redraw = true
@@ -342,6 +365,7 @@ end
 -- Fast-event guard: vim.cmd.mode() can't run inside fast events. Fall
 -- back to vim.schedule (next loop iteration) when we're in one — still
 -- faster than waiting for the 30 ms timer, and crash-free.
+---@return nil
 local function mark_all_dirty_and_flush()
     M._force_all_dirty()
     if vim.in_fast_event() then
@@ -406,8 +430,8 @@ local function mark_all_dirty_and_flush()
             emit_set[#emit_set + 1] = p
         end
         table.sort(emit_set, function(a, b)
-            local ao = (a.provider.get and a.provider.get(a.id)) or {}
-            local bo = (b.provider.get and b.provider.get(b.id)) or {}
+            local ao = (a.callbacks.get_opts and a.callbacks.get_opts(a.id)) or {}
+            local bo = (b.callbacks.get_opts and b.callbacks.get_opts(b.id)) or {}
             local az = ao.zindex or 0
             local bz = bo.zindex or 0
             if az ~= bz then
@@ -422,13 +446,13 @@ local function mark_all_dirty_and_flush()
         for _, p in ipairs(emit_set) do
             local positions = p.get_pos() or {}
             for _, pos in ipairs(positions) do
-                if p.provider._build_at then
-                    local bytes = p.provider._build_at(p.id, pos)
+                if p.callbacks.build_at then
+                    local bytes = p.callbacks.build_at(p.id, pos)
                     if bytes then
                         util.term_send(bytes)
                     end
                 else
-                    p.provider._emit_at(p.id, pos)
+                    p.callbacks.emit_at(p.id, pos)
                 end
             end
             p.last_positions = positions
@@ -461,6 +485,7 @@ end
 -- TRUE (both treated as "not visible"), the scan thinks nothing
 -- changed, and the stale image bytes linger on the terminal until
 -- the next genuine position change.
+---@return nil
 M._force_all_dirty = function()
     for _, p in pairs(placements) do
         p.force_redraw = true

@@ -1,15 +1,3 @@
--- lua/alt-img/sixel/_encode.lua
--- Pure-Lua sixel encoder (median-cut quantizer + DCS emitter) plus a small
--- dispatcher that routes through external tools (`img2sixel`, `magick`) when
--- they're available. Lives in `sixel/` because none of this is reusable by
--- the iterm2 protocol — sixel-specific output format, sixel-specific cost
--- profile.
---
--- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
---   runtime/lua/vim/ui/img/_sixel.lua
--- Splits the encoder out from the provider so tests can exercise it directly
--- and the provider in sixel.lua stays focused on state management.
-
 local M = {}
 
 local band = require("bit").band -- luacheck: ignore (kept for parity / future use)

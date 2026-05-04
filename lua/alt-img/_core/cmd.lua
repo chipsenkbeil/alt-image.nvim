@@ -13,10 +13,11 @@ local M = {}
 ---@field complete? fun(arg_lead:string):string[]
 ---@field desc? string
 
--- Resolve a friendly name for the active vim.ui.img provider, including
--- the underlying choice when the autodetect dispatcher is in use. Falls
--- back to a `<not active>` string when the user hasn't loaded any of our
--- providers — `:AltImg info` still prints something useful in that case.
+---Resolve a friendly name for the active vim.ui.img provider, including
+---the underlying choice when the autodetect dispatcher is in use. Falls
+---back to a `<not active>` string when the user hasn't loaded any of our
+---providers — `:AltImg info` still prints something useful in that case.
+---@return string
 local function provider_name()
     local img = vim.ui.img
     if not img then
@@ -161,14 +162,16 @@ function M.info_lines()
     return lines
 end
 
----@type table<string, altimg.Subcommand>
--- Open a scratch buffer in a horizontal split below, populate it with
--- `lines`, mark non-modifiable, and bind `q` to close. We use a buffer
--- instead of print() so the diagnostic dump never triggers nvim's
--- hit-enter prompt — and therefore never causes the terminal-side full
--- redraw that wipes our image cells. Closing the split fires WinClosed,
--- which the render loop's force-dirty autocmd group already covers, so
--- placements re-emit naturally.
+---Open a scratch buffer in a horizontal split below, populate it with
+---`lines`, mark non-modifiable, and bind `q` to close. We use a buffer
+---instead of print() so the diagnostic dump never triggers nvim's
+---hit-enter prompt — and therefore never causes the terminal-side full
+---redraw that wipes our image cells. Closing the split fires WinClosed,
+---which the render loop's force-dirty autocmd group already covers, so
+---placements re-emit naturally.
+---@param title string buffer name (e.g. "alt-img://info")
+---@param lines string[]
+---@return nil
 local function open_scratch(title, lines)
     local buf = vim.api.nvim_create_buf(false, true) -- listed=false, scratch=true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -196,6 +199,7 @@ local function open_scratch(title, lines)
     vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true })
 end
 
+---@type table<string, altimg.Subcommand>
 M.subcommands = {
     info = {
         desc = "Open a scratch buffer with runtime diagnostics (terminal env, cell size, scale, active placements). `q` to close.",
@@ -206,12 +210,7 @@ M.subcommands = {
     refresh = {
         desc = "Force every placement to re-emit (use after :mode, :redraw!, external clears).",
         impl = function()
-            local img = vim.ui.img
-            if img and img.refresh then
-                img.refresh()
-            else
-                vim.notify("alt-img: vim.ui.img.refresh() not available", vim.log.levels.WARN)
-            end
+            require("alt-img._core.render").refresh()
         end,
     },
 }
@@ -260,7 +259,8 @@ end
 ---name, suggest matching subcommand names. Once a subcommand has been
 ---chosen, delegate to its `complete` callback if present.
 ---@param arg_lead string
----@param line string Full command line up to cursor.
+---@param line string full command line up to cursor
+---@param _pos integer cursor position (unused)
 ---@return string[]
 function M.complete(arg_lead, line, _pos)
     -- Strip the leading `AltImg` token (with optional `!`) and any space.

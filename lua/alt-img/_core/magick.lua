@@ -48,10 +48,7 @@ local function run_async(cmd, stdin, on_done)
             if obj.code ~= 0 or not obj.stdout or #obj.stdout == 0 then
                 if obj.stderr and #obj.stderr > 0 then
                     vim.schedule(function()
-                        vim.notify_once(
-                            ("alt-img: %s failed: %s"):format(cmd[1], obj.stderr),
-                            vim.log.levels.DEBUG
-                        )
+                        vim.notify_once(("alt-img: %s failed: %s"):format(cmd[1], obj.stderr), vim.log.levels.DEBUG)
                     end)
                 end
                 on_done(nil)
@@ -235,7 +232,13 @@ end
 -- in parallel with the magick subprocess.
 -- ---------------------------------------------------------------------
 
----Async: decode + resize + PNG re-encode. on_done(png_bytes_or_nil).
+---Async: decode + resize + PNG re-encode. Invokes `on_done(png_or_nil)` from
+---the main loop when the subprocess exits.
+---@param png_bytes string
+---@param w_px integer target width in pixels
+---@param h_px integer target height in pixels
+---@param on_done fun(png: string?)
+---@return nil
 function M.encode_png_resized_async(png_bytes, w_px, h_px, on_done)
     local bin = M.binary()
     if not bin then
@@ -245,7 +248,14 @@ function M.encode_png_resized_async(png_bytes, w_px, h_px, on_done)
     run_async({ bin, "-", "-sample", geom, "png:-" }, png_bytes, on_done)
 end
 
----Async: crop a PNG sub-rectangle. on_done(cropped_png_or_nil).
+---Async: crop a PNG sub-rectangle. Invokes `on_done(cropped_png_or_nil)`.
+---@param png_bytes string
+---@param x_px integer
+---@param y_px integer
+---@param w_px integer
+---@param h_px integer
+---@param on_done fun(png: string?)
+---@return nil
 function M.crop_to_png_async(png_bytes, x_px, y_px, w_px, h_px, on_done)
     local bin = M.binary()
     if not bin then
@@ -255,7 +265,13 @@ function M.crop_to_png_async(png_bytes, x_px, y_px, w_px, h_px, on_done)
     run_async({ bin, "-", "-crop", geom, "png:-" }, png_bytes, on_done)
 end
 
----Async: decode + resize + sixel-encode. on_done(sixel_dcs_or_nil).
+---Async: decode + resize + sixel-encode. Invokes `on_done(sixel_dcs_or_nil)`.
+---@param png_bytes string
+---@param w_px integer target width in pixels
+---@param h_px integer target height in pixels
+---@param on_done fun(sixel: string?)
+---@param colors integer? max palette size (default 256)
+---@return nil
 function M.encode_sixel_from_png_resized_async(png_bytes, w_px, h_px, on_done, colors)
     local bin = M.binary()
     if not bin then
@@ -269,7 +285,17 @@ function M.encode_sixel_from_png_resized_async(png_bytes, w_px, h_px, on_done, c
 end
 
 ---Async: decode + resize-to-target + crop-of-target + sixel-encode in one
----subprocess. on_done(sixel_dcs_or_nil).
+---subprocess. Invokes `on_done(sixel_dcs_or_nil)`.
+---@param png_bytes string original PNG bytes
+---@param full_w_px integer resized full-image width in pixels
+---@param full_h_px integer resized full-image height in pixels
+---@param x_px integer crop x in target pixel space
+---@param y_px integer crop y in target pixel space
+---@param w_px integer crop width in target pixel space
+---@param h_px integer crop height in target pixel space
+---@param on_done fun(sixel: string?)
+---@param colors integer? max palette size (default 256)
+---@return nil
 function M.crop_resized_to_sixel_async(png_bytes, full_w_px, full_h_px, x_px, y_px, w_px, h_px, on_done, colors)
     local bin = M.binary()
     if not bin then

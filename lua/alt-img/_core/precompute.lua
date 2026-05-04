@@ -2,14 +2,14 @@
 --
 -- Why this exists:
 --   When an image scrolls partially out of view, the carrier's get_pos
---   returns a `src` rect describing the visible sub-image. The provider
---   crops + re-encodes for that exact rect on the first emit and caches
+--   returns a `src` rect describing the visible sub-image. The registered
+--   callbacks crop + re-encode for that exact rect on the first emit and cache
 --   the result. The first scroll into a new clip state therefore spends
 --   one magick / img2sixel subprocess invocation (10–50 ms typical) — a
 --   hiccup the user feels while scrolling.
 --
 --   This module pre-fills the per-placement crop cache by calling
---   `provider._build_at(id, { src = ... })` for the variants the
+--   `callbacks.build_at(id, { src = ... })` for the variants the
 --   carrier is likely to ask for, in a background timer that yields
 --   between iterations. By the time the user scrolls into one of those
 --   states, the cache is warm and the emit path just `term_send`s the
@@ -20,7 +20,7 @@
 --   * Bottom crops: src = { x=0, y=H-N,      w=W, h=N } for N = 1 .. H-1
 --
 --   Total: 2*(H-1) entries. The full image (h=H) is already cached on
---   the provider's "is_full" fast path and doesn't need a per-src entry.
+--   the caller's "is_full" fast path and doesn't need a per-src entry.
 --
 --   Width-clipping (`src.w < W`, image extending past `win_right`) is
 --   not enumerated. It's rare, would explode the variation count to
@@ -28,7 +28,7 @@
 --   on the first scroll into that state.
 --
 -- Cache sizing:
---   The provider's per-placement crop cache is a fixed-size LRU
+--   The caller's per-placement crop cache is a fixed-size LRU
 --   (`crop_cache_size`, default 256). For lossless precompute the LRU
 --   must hold ≥ 2*(H-1) entries — i.e. images taller than ~128 cells
 --   need a larger `crop_cache_size`. Past that limit, precompute still
@@ -36,8 +36,8 @@
 --   purpose.
 --
 -- Activity throttle:
---   Each variation runs on the main Lua thread (the provider's
---   `_build_at` calls into pure-Lua decoders / `vim.system():wait()` for
+--   Each variation runs on the main Lua thread (the callbacks'
+--   `build_at` calls into pure-Lua decoders / `vim.system():wait()` for
 --   magick). To avoid competing with scroll/typing for cycles, the
 --   timer callback skips itself if the user has been active within the
 --   last `precompute_idle_threshold_ms` milliseconds (CursorMoved,
@@ -56,15 +56,18 @@
 --   behaviour (encode-on-demand on first scroll) restored.
 --
 -- Cancellation:
---   start() cancels any prior precompute for the same (provider, id)
+--   start() cancels any prior precompute for the same (token, id)
 --   before scheduling new work. del() and dim-change paths in the
---   providers call cancel() explicitly.
+--   callers call cancel() explicitly.
 
 local _config = require("alt-img._core.config")
 
 local M = {}
 
--- Active precompute timers, keyed by tostring(provider) .. ":" .. tostring(id).
+---@class alt-img._core.precompute.Active : vim.uv.Timer
+-- (each entry in the `active` table IS the uv timer for that placement)
+
+-- Active precompute timers, keyed by tostring(token) .. ":" .. tostring(id).
 --
 -- Stashed on _G so the table survives `package.loaded[...] = nil` reloads
 -- (used heavily in tests). Without this, an old timer's closure holds a
@@ -73,6 +76,7 @@ local M = {}
 -- The stale timer would then keep calling vim.system, hitting whatever
 -- mock the current test installed — corrupting subprocess-count
 -- assertions in unrelated specs.
+---@type table<string, alt-img._core.precompute.Active>
 local active = _G._altimg_precompute_active or {}
 _G._altimg_precompute_active = active
 
@@ -80,6 +84,7 @@ _G._altimg_precompute_active = active
 -- at the time of the most recent user-visible event (cursor move, text
 -- change, scroll, mode change). The precompute timer compares this
 -- against the current time to decide whether to defer the next variation.
+---@type integer
 local last_activity_ns = 0
 
 local AUGROUP = vim.api.nvim_create_augroup("alt-img.precompute", { clear = true })
@@ -112,10 +117,15 @@ pcall(vim.api.nvim_create_autocmd, "MouseMove", {
     end,
 })
 
-local function key(provider, id)
-    return tostring(provider) .. ":" .. tostring(id)
+---@param token any
+---@param id integer|any
+---@return string
+local function key(token, id)
+    return tostring(token) .. ":" .. tostring(id)
 end
 
+---@param threshold_ms? number milliseconds; 0 or nil disables throttling
+---@return boolean
 local function user_recently_active(threshold_ms)
     if not threshold_ms or threshold_ms <= 0 then
         return false
@@ -127,8 +137,17 @@ local function user_recently_active(threshold_ms)
     return idle_ns < threshold_ms * 1e6
 end
 
+---@class alt-img._core.precompute.Variation
+---@field x integer left edge of the crop (always 0 for vertical-only crops)
+---@field y integer top edge of the crop in cell rows
+---@field w integer width of the crop in cells
+---@field h integer height of the crop in cells
+
 -- Build the list of vertical-only crop variations for an image of (W, H)
 -- cells. Exposed for tests; not part of the public API.
+---@param w integer image width in cells
+---@param h integer image height in cells
+---@return alt-img._core.precompute.Variation[]
 function M._enumerate_variations(w, h)
     local out = {}
     if type(w) ~= "number" or type(h) ~= "number" or w < 1 or h < 1 then
@@ -148,12 +167,12 @@ function M._enumerate_variations(w, h)
     return out
 end
 
----Cancel any active precompute for (provider, id). Safe to call when
+---Cancel any active precompute for (token, id). Safe to call when
 ---no precompute is scheduled.
----@param provider table
----@param id any
-function M.cancel(provider, id)
-    local k = key(provider, id)
+---@param token any opaque identity
+---@param id integer
+function M.cancel(token, id)
+    local k = key(token, id)
     local timer = active[k]
     if timer then
         if not timer:is_closing() then
@@ -165,32 +184,34 @@ function M.cancel(provider, id)
 end
 
 ---Schedule background precomputation of vertical crop variations for the
----placement at (provider, id) with the given canonical opts (must
+---placement at (token, id) with the given canonical opts (must
 ---include numeric .width and .height). Cancels any existing precompute
 ---for this placement first. No-op when:
 ---  * `vim.g.alt_img.precompute_crops` is false
----  * the provider exposes neither `_precompute_async` nor `_build_at`
+---  * callbacks exposes neither `precompute_async` nor `build_at`
 ---  * opts.width / opts.height is missing or non-numeric
 ---  * the variation list is empty
 ---
----When the provider exposes `_precompute_async`, magick subprocesses
+---When callbacks exposes `precompute_async`, magick subprocesses
 ---spawn in parallel (up to `precompute_max_concurrent`) and the main
 ---thread stays free during the wait. Falls back to synchronous
----`_build_at` (one variant per timer tick) when async isn't available
+---`build_at` (one variant per timer tick) when async isn't available
 ---— mostly the case for non-magick configs where the build path is
 ---pure-Lua and CPU-bound on the main thread.
----@param provider table provider module (iterm2 / sixel)
----@param id any placement id
+---@param token any opaque identity (matches what render.register received)
+---@param id integer placement id
 ---@param opts table canonical opts (with width, height)
-function M.start(provider, id, opts)
-    M.cancel(provider, id)
+---@param callbacks { build_at?: fun(id: integer, pos: table): string?, precompute_async?: fun(id: integer, src: table, on_done: fun()) }
+function M.start(token, id, opts, callbacks)
+    M.cancel(token, id)
+    callbacks = callbacks or {}
 
     local cfg = _config.read() or {}
     if cfg.precompute_crops == false then
         return
     end
-    local has_async = type(provider._precompute_async) == "function"
-    local has_sync = type(provider._build_at) == "function"
+    local has_async = type(callbacks.precompute_async) == "function"
+    local has_sync = type(callbacks.build_at) == "function"
     if not has_async and not has_sync then
         return
     end
@@ -204,7 +225,7 @@ function M.start(provider, id, opts)
     if not timer then
         return
     end
-    active[key(provider, id)] = timer
+    active[key(token, id)] = timer
 
     local interval = cfg.precompute_interval_ms
     if type(interval) ~= "number" or interval < 1 then
@@ -227,22 +248,18 @@ function M.start(provider, id, opts)
     local total = #variations
     local started_ns = vim.uv.hrtime()
     if notify then
-        -- precompute.start is invoked from a provider's set() (main loop),
+        -- precompute.start is invoked from the caller's set() (main loop),
         -- not a fast-event context, so calling vim.notify directly is
         -- safe. Avoiding the always-defer-via-vim.schedule keeps test-
         -- driven schedule callbacks from crossing test boundaries and
         -- counting against unrelated assertions.
         vim.notify(
-            string.format(
-                "alt-img: precomputing %d crop variants (%s)",
-                total,
-                has_async and "async" or "sync"
-            ),
+            string.format("alt-img: precomputing %d crop variants (%s)", total, has_async and "async" or "sync"),
             vim.log.levels.INFO
         )
     end
 
-    local timer_key = key(provider, id)
+    local timer_key = key(token, id)
     local idx = 1
     local in_flight = 0
     local done_count = 0
@@ -264,11 +281,7 @@ function M.start(provider, id, opts)
                 local elapsed_ms = (vim.uv.hrtime() - started_ns) / 1e6
                 local function do_notify()
                     vim.notify(
-                        string.format(
-                            "alt-img: precompute done (%d variants, %.0f ms wall)",
-                            total,
-                            elapsed_ms
-                        ),
+                        string.format("alt-img: precompute done (%d variants, %.0f ms wall)", total, elapsed_ms),
                         vim.log.levels.INFO
                     )
                 end
@@ -311,7 +324,7 @@ function M.start(provider, id, opts)
                     local src = variations[idx]
                     idx = idx + 1
                     in_flight = in_flight + 1
-                    local ok = pcall(provider._precompute_async, id, src, function()
+                    local ok = pcall(callbacks.precompute_async, id, src, function()
                         in_flight = in_flight - 1
                         done_count = done_count + 1
                         maybe_finish()
@@ -333,7 +346,7 @@ function M.start(provider, id, opts)
                 end
                 local src = variations[idx]
                 idx = idx + 1
-                pcall(provider._build_at, id, { row = 1, col = 1, src = src })
+                pcall(callbacks.build_at, id, { row = 1, col = 1, src = src })
                 done_count = done_count + 1
                 maybe_finish()
             end
@@ -341,20 +354,20 @@ function M.start(provider, id, opts)
     )
 end
 
----Test hook: returns true if (provider, id) currently has an active
+---Test hook: returns true if (token, id) currently has an active
 ---precompute timer.
----@param provider table
----@param id any
+---@param token any opaque identity
+---@param id integer
 ---@return boolean
-function M._is_active(provider, id)
-    return active[key(provider, id)] ~= nil
+function M._is_active(token, id)
+    return active[key(token, id)] ~= nil
 end
 
----Stop ALL active precompute timers regardless of (provider, id) key.
----Intended for test setup — provider modules are reloaded across
----test specs and stale timer closures (holding a stale provider /
+---Stop ALL active precompute timers regardless of (token, id) key.
+---Intended for test setup — stale timer closures (holding a stale
 ---vim.system reference) would otherwise keep firing during unrelated
 ---tests and pollute subprocess-count assertions.
+---@return nil
 function M.cancel_all()
     for k, timer in pairs(active) do
         if timer and not timer:is_closing() then

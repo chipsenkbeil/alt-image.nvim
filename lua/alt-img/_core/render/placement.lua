@@ -1,0 +1,11 @@
+---@meta
+
+---@class alt-img._core.render.Placement
+---@field token any opaque identity (any unique value)
+---@field id integer
+---@field get_pos fun(): alt-img._core.render.Position[]
+---@field callbacks alt-img._core.render.Callbacks
+---@field redraw boolean dirty flag set by autocmds
+---@field force_redraw? boolean force re-emit even if positions unchanged
+---@field last_positions? alt-img._core.render.Position[]
+---@field next_positions? alt-img._core.render.Position[]

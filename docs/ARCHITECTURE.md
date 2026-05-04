@@ -1,5 +1,9 @@
 # alt-img.nvim architecture
 
+> **Public API contract:** see [API.md](API.md). This document describes
+> the *implementation* — schedulers, caches, autocmds — that backs the
+> contract.
+
 Reference for everything inside the `lua/alt-img/` tree: how a `set()` call
 turns into pixels on the terminal, when those pixels get re-emitted, when
 they get cleared, where the caches sit, and which subprocess runs where.
@@ -13,11 +17,10 @@ For the protocol-level details that the encoders actually emit, see
 
 ```
 lua/alt-img/
-├── init.lua                    -- autodetect dispatcher (vim.ui.img surface)
+├── init.lua                    -- autodetect forwarder (vim.ui.img surface)
 ├── iterm2.lua                  -- OSC 1337 provider
 ├── sixel.lua                   -- sixel DCS provider
 ├── health.lua                  -- :checkhealth alt-img
-├── _cmd.lua                    -- :AltImg user-command dispatch & subcommands
 ├── iterm2/
 │   └── health.lua              -- :checkhealth alt-img.iterm2
 ├── sixel/
@@ -27,6 +30,8 @@ lua/alt-img/
 └── _core/
     ├── render.lua              -- timer-driven dirty/emit scheduler
     ├── carrier.lua             -- floats / extmarks for relative=editor|buffer
+    ├── autodetect.lua          -- provider detection (iterm2 vs sixel)
+    ├── cmd.lua                 -- :AltImg user-command dispatch & subcommands
     ├── util.lua                -- cell-pixel size, scale detection, term_send
     ├── tty.lua                 -- TermResponse-based query helper
     ├── magick.lua              -- magick / convert binary detection / spawn
@@ -38,11 +43,11 @@ lua/alt-img/
 plugin/alt-img.lua              -- registers :AltImg user command (auto-loaded)
 ```
 
-The `_core/` and `_cmd.lua` modules are private: callers come from
-`init.lua`, `iterm2.lua`, `sixel.lua`, or the user command. The two
-provider modules (`iterm2.lua`, `sixel.lua`) and the autodetect
-dispatcher (`init.lua`) export the public `set/get/del/refresh/_supported`
-surface.
+The `_core/` modules are private: callers come from `init.lua`,
+`iterm2.lua`, `sixel.lua`, or the user command. The two provider modules
+(`iterm2.lua`, `sixel.lua`) and the autodetect forwarder (`init.lua`)
+export the public `set/get/del/_supported` surface (matches upstream
+`vim.ui.img`; see [API.md](API.md)).
 
 ---
 
@@ -55,36 +60,37 @@ surface.
                  │   | alt-img.iterm2     │
                  │   | alt-img.sixel      │
                  └─────────┬─────────────┘
-                           │ set / get / del / refresh
+                           │ set / get / del
                            ▼
             ┌─────────────────────────────────┐
             │ provider (iterm2.lua | sixel.lua) │
-            │  ┌──────────────────────────────┐ │
-            │  │ state[id] = {                │ │
-            │  │   data, opts,                │ │
-            │  │   resized_rgba,              │ │
-            │  │   full_png/sixel_cache,      │ │
-            │  │   crop LRU                   │ │
-            │  │ }                             │ │
-            │  └──────────────────────────────┘ │
+            │  file-local state[id] = {        │
+            │    data, opts,                   │
+            │    resized_rgba,                 │
+            │    full_png/sixel_cache,         │
+            │    crop LRU                      │
+            │  }                               │
             └──────┬─────────────────┬─────────┘
-                   │ register +      │ register +
-                   │ get_pos closure │ unregister
-                   ▼                 ▼
-       ┌────────────────────┐  ┌──────────────────────┐
-       │ _core/carrier.lua  │  │ _core/render.lua      │
-       │  • opens floats    │  │  • 30 ms timer        │
-       │  • places extmarks │  │  • dirty flags        │
-       │  • resolves        │  │  • position diffing   │
-       │    screen rect     │  │  • Mode 2026 sync     │
-       └────────┬───────────┘  └──────────┬────────────┘
-                │ uses                    │ calls _emit_at
-                ▼                         ▼
-       ┌────────────────────┐    ┌────────────────────┐
-       │  vim.fn.screenpos  │    │  provider._emit_at │
-       │  winsaveview       │    │  (per placement)   │
-       │  nvim_win_*        │    └─────────┬──────────┘
-       └────────────────────┘              │ writes bytes
+                   │ register +      │ register callbacks +
+                   │ get_pos closure │   { emit_at, build_at,
+                   ▼                 │     get_opts }
+       ┌────────────────────┐        ▼
+       │ _core/carrier.lua  │  ┌──────────────────────┐
+       │  • opens floats    │  │ _core/render.lua      │
+       │  • places extmarks │  │  • 30 ms timer        │
+       │  • resolves        │  │  • dirty flags        │
+       │    screen rect     │  │  • position diffing   │
+       └────────┬───────────┘  │  • Mode 2026 sync     │
+                │ uses         └──────────┬────────────┘
+                ▼                         │ invokes registered
+       ┌────────────────────┐             │ emit_at / build_at
+       │  vim.fn.screenpos  │             ▼
+       │  winsaveview       │    ┌────────────────────┐
+       │  nvim_win_*        │    │  file-local        │
+       └────────────────────┘    │  emit_at / build_at│
+                                 │  (per placement)   │
+                                 └─────────┬──────────┘
+                                           │ writes bytes
                                            ▼
                                   ┌──────────────────┐
                                   │ util.term_send   │
@@ -109,17 +115,18 @@ provider ──► magick.lua / sixel/_libsixel.lua  (subprocess spawn via vim.s
 
 ## 3. Public API contract
 
-| Function | Description | Source |
-|---|---|---|
-| `set(data\|id, opts)` | Register or update a placement. `data` is PNG bytes; `opts` are cell-coords + relative kind. Returns the placement id. | `iterm2.lua:251`, `sixel.lua:233` |
-| `get(id)` | Return the canonical opts for an existing placement, or nil. | `iterm2.lua:334`, `sixel.lua:308` |
-| `del(id)` | Delete one placement. `del(math.huge)` deletes everything. | `iterm2.lua:342`, `sixel.lua:316` |
-| `refresh()` | Force every placement to re-emit on the next tick (nulls `last_positions`, ticks once). Used after `:mode`, `:redraw!`, terminal-side wipes. | `iterm2.lua:M.refresh`, `sixel.lua:M.refresh`, dispatched through `_core/render.lua:M.refresh` |
-| `_supported(opts)` | Sync probe of whether the current terminal supports this provider. Used by the autodetect dispatcher. | `iterm2.lua:_supported`, `sixel.lua:_supported` |
+The full contract is in [API.md](API.md). In brief:
 
-Everything else (`_emit_at`, `_state`, `_provider`, `_timer`,
-`_force_all_dirty`, `_query_*`) is implementation detail exposed only for
-testing.
+| Function | Description |
+|---|---|
+| `set(data\|id, opts)` | Register or update a placement. `data` is PNG bytes; `opts` are cell-coords + relative kind. Returns the placement id. |
+| `get(id)` | Return the canonical opts for an existing placement, or nil. |
+| `del(id)` | Delete one placement. `del(math.huge)` deletes everything. |
+| `_supported(opts)` | `@private`. Sync probe of whether the current terminal supports this provider. Used by the autodetect module. |
+
+Everything else — `emit_at`, `build_at`, `precompute_async`, `state`, the
+render timer, force-dirty helpers — is file-local in `iterm2.lua`,
+`sixel.lua`, and `_core/render.lua`. None of it appears on the module table.
 
 ---
 
@@ -171,7 +178,7 @@ provider.set(...)                                            │
                 for p in emit_set:                            │
                     for pos in p.next_positions:              │
                         payloads.push(                        │
-                          provider._build_at(p.id, pos))      │
+                          p.callbacks.build_at(p.id, pos))    │
                     p.last_positions = p.next_positions       │
                     p.redraw = false                          │
                                                               │
@@ -264,11 +271,11 @@ them:
 - Hit-enter prompt dismissal on its own (no event fires; only the *next*
   user action resumes our autocmds)
 
-For these, the manual escape hatch is **`:AltImg refresh`** /
-`vim.ui.img.refresh()`. To avoid the most common case — long output
-triggering nvim's hit-enter prompt — `:AltImg info` opens a scratch
-buffer rather than printing, so the user dismisses the buffer with `q`
-which fires `WinClosed` (in the force path).
+For these, the manual escape hatch is **`:AltImg refresh`**, which calls
+`render.force_all_dirty()` internally. To avoid the most common case —
+long output triggering nvim's hit-enter prompt — `:AltImg info` opens a
+scratch buffer rather than printing, so the user dismisses the buffer
+with `q` which fires `WinClosed` (in the force path).
 
 ---
 
@@ -298,7 +305,7 @@ relies entirely on `vim.cmd.mode()` inside the sync block.
 ```
 Clear flow inside tick() when need_clear:
 
-  Pass 1 (outside sync): provider._build_at(id, pos) -> bytes
+  Pass 1 (outside sync): p.callbacks.build_at(id, pos) -> bytes
                          (cache misses can spawn magick / img2sixel,
                           which yield the event loop — fine here)
 
@@ -336,8 +343,8 @@ is what guarantees that.
 
 ## 7. Caching
 
-Per-placement `state[id]` table on each provider holds the entire cache
-hierarchy:
+Per-placement `state[id]` table — a file-local in `iterm2.lua` /
+`sixel.lua` — holds the entire cache hierarchy:
 
 | Cache | Where | Granularity | Invalidation |
 |---|---|---|---|
@@ -360,9 +367,10 @@ Module-level caches:
 | `_cell_size_queried` (CSI 16t) | util.lua:142-186 | until VimResized/UIEnter |
 | `_terminal_pixel_scale_queried` | util.lua:200-260 | until VimResized/UIEnter |
 
-Refresh (`vim.ui.img.refresh()`) does NOT invalidate any of these — it
-just nulls each placement's `last_positions` so the cached payload is
-re-pushed through `nvim_ui_send`. Encoding caches stay warm.
+Force-redraw (`:AltImg refresh` → `render.force_all_dirty()`) does NOT
+invalidate any of these — it just nulls each placement's `last_positions`
+so the cached payload is re-pushed through `nvim_ui_send`. Encoding caches
+stay warm.
 
 ---
 
@@ -453,16 +461,16 @@ version:
 
 ---
 
-## 10. Provider auto-detection (`alt-img/init.lua`)
+## 10. Provider auto-detection (`_core/autodetect.lua`)
 
 ```
 require("alt-img")  -- via vim.ui.img = require("alt-img")
        │
        ▼
-alt-img.M.set / get / del / refresh
+alt-img.M.set / get / del   (forwarder: init.lua resolves provider first)
        │
        ▼ first call
-M._provider() ──── cached ─►  iterm2 OR sixel
+_core/autodetect.detect() ──── cached ─►  iterm2 OR sixel
        │
        ▼ on miss
 detect()
@@ -482,8 +490,8 @@ detect()
    └─ neither → error, ask user to require explicitly
 ```
 
-The detect cache flips on `M._reset_provider_cache()` (test hook). In
-production it persists for the session.
+The detect cache is a file-local in `_core/autodetect.lua` and persists
+for the session.
 
 ---
 
@@ -493,7 +501,7 @@ Two top-level commands, both following the lumen-oss subcommand pattern:
 
 | Command | Source | Subcommands |
 |---|---|---|
-| `:AltImg` | `plugin/alt-img.lua` + `lua/alt-img/_cmd.lua` | `info`, `refresh` |
+| `:AltImg` | `plugin/alt-img.lua` + `lua/alt-img/_core/cmd.lua` | `info`, `refresh` |
 | `:AltImgTest` | `test/manual_init.lua` (smoke-test only) | `path`, `demo`, `del`, `mouse`, `provider` |
 
 `:AltImg` is auto-loaded via the runtimepath plugin/ folder. The smoke

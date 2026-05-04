@@ -1,13 +1,13 @@
--- :checkhealth alt-img.iterm2
 local M = {}
 
+---@return nil
 function M.check()
     local h = vim.health
     h.start("alt-img.iterm2")
 
     local ok, msg = require("alt-img.iterm2")._supported()
     if ok then
-        h.ok("iTerm2 OSC 1337 protocol: supported" .. (msg and (" (" .. msg .. ")") or ""))
+        h.ok("iTerm2 OSC 1337 protocol: supported")
     else
         h.error(
             "iTerm2 OSC 1337 protocol: not detected. "

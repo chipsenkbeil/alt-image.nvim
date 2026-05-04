@@ -1,12 +1,9 @@
--- :checkhealth alt-img
--- Top-level report. Probes both protocols (iterm2, sixel) so the user can see
--- at a glance which ones the current terminal can render. Drill-down checks
--- `:checkhealth alt-img.iterm2` and `:checkhealth alt-img.sixel` print
--- the same per-protocol detail in isolation.
 local M = {}
 
+---@type string[]
 local PROTOCOLS = { "iterm2", "sixel" }
 
+---@param h vim.health.Report
 local function active_provider_line(h)
     -- Report what alt-img's autodetect picks. Users who installed a specific
     -- provider directly bypassed autodetect entirely; the per-protocol
@@ -26,6 +23,7 @@ local function active_provider_line(h)
     end
 end
 
+---@param h vim.health.Report
 local function probe_protocols(h)
     h.start("alt-img: protocols")
     for _, name in ipairs(PROTOCOLS) do
@@ -39,6 +37,7 @@ local function probe_protocols(h)
     end
 end
 
+---@param h vim.health.Report
 local function tooling(h)
     h.start("alt-img: external tools")
 
@@ -69,21 +68,20 @@ local function tooling(h)
     end
 end
 
+---@param h vim.health.Report
 local function environment(h)
-    -- Only emit the section header if something is worth saying so we don't
-    -- create empty sections in the report under the common case.
     local notes = {}
     if vim.env.SSH_CONNECTION then
         notes[#notes + 1] = {
             "warn",
-            "SSH connection detected. Inline images over SSH require terminal " .. "support on your local terminal.",
+            "SSH connection detected. Inline images over SSH require terminal support on your local terminal.",
         }
     end
     if vim.env.TMUX then
         notes[#notes + 1] = {
             "warn",
-            "tmux detected: tmux passthrough is NOT supported in this version "
-                .. "of alt-img.nvim. Images may not render. Tracked in README.",
+            "tmux detected: tmux passthrough is NOT supported in this version of alt-img.nvim. "
+                .. "Images may not render. Tracked in README.",
         }
     end
     if vim.env.TERM_PROGRAM == "Apple_Terminal" then
@@ -99,6 +97,7 @@ local function environment(h)
     end
 end
 
+---@return nil
 function M.check()
     local h = vim.health
     h.start("alt-img")

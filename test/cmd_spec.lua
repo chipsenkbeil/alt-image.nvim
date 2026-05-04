@@ -1,11 +1,11 @@
 -- test/cmd_spec.lua
--- Coverage for the production `:AltImg` user command (lua/alt-img/_cmd.lua).
+-- Coverage for the production `:AltImg` user command (lua/alt-img/_core/cmd.lua).
 -- We verify dispatch routing, completion behavior, and that info_lines()
 -- returns a non-empty diagnostic dump even when vim.ui.img isn't set.
 
 local function fresh_cmd()
-    package.loaded["alt-img._cmd"] = nil
-    return require("alt-img._cmd")
+    package.loaded["alt-img._core.cmd"] = nil
+    return require("alt-img._core.cmd")
 end
 
 local function with_notify_capture(fn)
@@ -21,7 +21,7 @@ local function with_notify_capture(fn)
     end
 end
 
-describe("alt-img._cmd dispatch", function()
+describe("alt-img._core.cmd dispatch", function()
     it("known subcommand is invoked with the args after the subcommand name", function()
         local cmd = fresh_cmd()
         local got
@@ -57,7 +57,7 @@ describe("alt-img._cmd dispatch", function()
     end)
 end)
 
-describe("alt-img._cmd completion", function()
+describe("alt-img._core.cmd completion", function()
     it("returns matching subcommand names when the user is still typing", function()
         local cmd = fresh_cmd()
         local out = cmd.complete("in", "AltImg in", #"AltImg in")
@@ -91,7 +91,7 @@ describe("alt-img._cmd completion", function()
     end)
 end)
 
-describe("alt-img._cmd info", function()
+describe("alt-img._core.cmd info", function()
     it("opens a scratch split that holds the diagnostic dump", function()
         -- Switching to a scratch buffer (instead of print) is what avoids
         -- nvim's hit-enter prompt — and therefore the terminal-side
@@ -145,31 +145,17 @@ describe("alt-img._cmd info", function()
     end)
 end)
 
-describe("alt-img._cmd refresh", function()
-    it("calls vim.ui.img.refresh() when available", function()
+describe("alt-img._core.cmd refresh", function()
+    it("calls _core/render.refresh() to force re-emit", function()
         local cmd = fresh_cmd()
-        local saved = vim.ui.img
+        local render = require("alt-img._core.render")
+        local saved = render.refresh
         local called = false
-        vim.ui.img = {
-            refresh = function()
-                called = true
-            end,
-        }
+        render.refresh = function()
+            called = true
+        end
         cmd.dispatch({ fargs = { "refresh" } })
-        vim.ui.img = saved
+        render.refresh = saved
         assert.is_true(called)
-    end)
-
-    it("notifies a warning when vim.ui.img has no refresh()", function()
-        local cmd = fresh_cmd()
-        local saved = vim.ui.img
-        vim.ui.img = {} -- no refresh function
-        with_notify_capture(function(seen)
-            cmd.dispatch({ fargs = { "refresh" } })
-            vim.ui.img = saved
-            assert.is_true(#seen >= 1)
-            assert.matches("refresh", seen[1].msg)
-            assert.equals(vim.log.levels.WARN, seen[1].level)
-        end)
     end)
 end)

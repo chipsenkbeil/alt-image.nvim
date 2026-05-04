@@ -1,8 +1,3 @@
--- lua/alt-img/iterm2.lua
--- iTerm2 OSC 1337 image protocol provider, drop-in for vim.ui.img.
--- Ported from chipsenkbeil/neovim:feat/MoreImgProviders
---   runtime/lua/vim/ui/img/_iterm2.lua
-
 local util = require("alt-img._core.util")
 local tty = require("alt-img._core.tty")
 local render = require("alt-img._core.render")
@@ -14,26 +9,42 @@ local _config = require("alt-img._core.config")
 
 local M = {}
 
+---@type table<string, boolean>
 local FAST_TERM_PROGRAMS = {
     ["iTerm.app"] = true,
     ["WezTerm"] = true,
 }
 
--- Per-id placement state.
--- state[id] = { data = bytes, opts = canonical_opts, id = id,
---               decoded_rgba = string|nil, decoded_w = int|nil, decoded_h = int|nil,
---               full_png = string|nil, full_png_b64 = string|nil,
---               png_cache_by_src = { [key]={ png=string, b64=string } },
---               png_cache_by_src_order = { key, ... } }
+---@class alt-img.iterm2.CropEntry
+---@field png string PNG bytes for this crop
+---@field b64 string base64-encoded PNG bytes for this crop
+
+---@class alt-img.iterm2.State
+---@field data string raw PNG bytes
+---@field opts vim.ui.img.Opts canonical opts
+---@field id integer placement id
+---@field resized_rgba string? RGBA pixel buffer after nearest-neighbor resize
+---@field resized_w integer? pixel width of resized buffer
+---@field resized_h integer? pixel height of resized buffer
+---@field full_png string? full-image PNG bytes (post-resize)
+---@field full_png_b64 string? base64-encoded full_png
+---@field png_cache_by_src table<string, alt-img.iterm2.CropEntry>? LRU map of crop key → cached PNG+b64
+---@field png_cache_by_src_order string[]? LRU insertion-order keys for png_cache_by_src
+
+---@type table<integer, alt-img.iterm2.State>
 local state = {}
+---@type integer
 local next_id = 1
 
+---@return integer
 local function new_id()
     local id = next_id
     next_id = next_id + 1
     return id
 end
 
+---@param opts? vim.ui.img.Opts
+---@return vim.ui.img.Opts
 local function canonicalize(opts)
     opts = opts or {}
     -- relative defaults: if opts.buf is set, default to 'buffer'; else 'ui'.
@@ -59,10 +70,9 @@ local function canonicalize(opts)
 end
 
 ---For non-ui modes, derive width/height from PNG IHDR if not provided.
----Mutates opts in-place. Data is guaranteed PNG by the boundary check in
----M.set, so we read the IHDR unconditionally.
+---Mutates opts in-place.
 ---@param data string raw PNG bytes
----@param opts table canonical opts
+---@param opts vim.ui.img.Opts canonical opts
 local function derive_dims(data, opts)
     if opts.relative == "ui" or (opts.width and opts.height) then
         return
@@ -75,11 +85,8 @@ local function derive_dims(data, opts)
 end
 
 ---Decode the source PNG to RGBA, resize via nearest-neighbor to the cell-pixel
----area requested by opts.width/opts.height, and cache the result. Mirrors
----sixel.lua's ensure_resized so iTerm2 receives a 1:1 pixel mapping (image
----dims == cell area in pixels) and renders sharply instead of relying on the
----terminal's smooth scaling.
----@param s table placement state
+---area requested by opts.width/opts.height, and cache the result.
+---@param s alt-img.iterm2.State
 ---@return string rgba, integer w, integer h
 local function ensure_resized(s)
     if s.resized_rgba then
@@ -98,18 +105,9 @@ local function ensure_resized(s)
     return rgba, w, h
 end
 
----Encode the resized RGBA buffer back to PNG once and cache it, alongside its
----base64 form. This is the data we send via OSC 1337 for the full-image fast
----path; the terminal sees image pixel dims that match the cell-pixel area
----exactly, so its built-in scaling becomes a no-op. The base64 cache avoids
----paying `vim.base64.encode` on every emit (non-trivial for large images
----under mouse-follow).
----
----When `magick` is on PATH and dims are known, route the full pipeline through
----one subprocess (`magick - -sample WxH! png:-`) so the pure-Lua decoder /
----resizer / encoder are bypassed. Symmetric to the sixel provider's magick
----fast path in sixel.lua.
----@param s table placement state
+---Encode the resized RGBA buffer back to PNG once and cache it alongside its
+---base64 form. Routes through magick when available and dims are known.
+---@param s alt-img.iterm2.State
 ---@return string png_bytes, string b64
 local function ensure_full_png(s)
     if s.full_png and s.full_png_b64 then
@@ -131,11 +129,9 @@ local function ensure_full_png(s)
     return s.full_png, s.full_png_b64
 end
 
----Crop a sub-rectangle of the resized PNG and re-encode as PNG. Also returns
----the base64-encoded form so callers (and the per-src LRU) can cache both
----together — base64 is paid once, not on every emit.
----@param s table placement state
----@param src table { x, y, w, h } in cell units
+---Crop a sub-rectangle of the resized PNG and re-encode as PNG.
+---@param s alt-img.iterm2.State
+---@param src { x: integer, y: integer, w: integer, h: integer } crop rect in cell units
 ---@return string png_bytes, string b64, integer cw_px, integer ch_px
 local function build_png_cropped(s, src)
     util.query_cell_size()
@@ -158,27 +154,30 @@ local function build_png_cropped(s, src)
     return png_bytes, vim.base64.encode(png_bytes), cw_px, ch_px
 end
 
+---@param s alt-img.iterm2.State
+---@param key string crop cache key
+---@return alt-img.iterm2.CropEntry?
 local function crop_cache_get(s, key)
     s.png_cache_by_src = s.png_cache_by_src or {}
     s.png_cache_by_src_order = s.png_cache_by_src_order or {}
     return lru.get(s.png_cache_by_src, s.png_cache_by_src_order, key)
 end
 
+---@param s alt-img.iterm2.State
+---@param key string crop cache key
+---@param value alt-img.iterm2.CropEntry
 local function crop_cache_put(s, key, value)
     s.png_cache_by_src = s.png_cache_by_src or {}
     s.png_cache_by_src_order = s.png_cache_by_src_order or {}
     lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, value, _config.read().crop_cache_size)
 end
 
--- Build the full byte string we'd send for placement `id` at `screen_pos`.
--- Returns nil when the placement is unknown (caller skips the term_send).
---
--- Split out from _emit_at so the render coordinator can construct payloads
--- *outside* the Mode 2026 sync block: cache misses here can spawn magick
--- via vim.system():wait() (in ensure_full_png / build_png_cropped), which
--- yields the event loop. Inside the sync block that yield is a footgun —
--- the terminal can decide our SYNC frame has gone stale and bail. Build
--- first, term_send second.
+---Build the full byte string for placement `id` at `screen_pos`. Returns nil
+---when the placement is unknown. Split from emit_at so the render coordinator
+---can construct payloads outside the Mode 2026 sync block.
+---@param id integer
+---@param screen_pos { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }?
+---@return string? bytes
 local function build_at(id, screen_pos)
     local s = state[id]
     if not s then
@@ -243,36 +242,23 @@ local function build_at(id, screen_pos)
     return cs.save .. cs.hide .. cs.move .. osc .. cs.restore .. cs.show
 end
 
--- Public so _render can call us. Builds the OSC 1337 payload and writes it.
-function M._emit_at(id, screen_pos)
+---Build the OSC 1337 payload and write it to the terminal.
+---@param id integer
+---@param screen_pos { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }?
+local function emit_at(id, screen_pos)
     local bytes = build_at(id, screen_pos)
     if bytes then
         util.term_send(bytes)
     end
 end
 
--- Public: build only, no term_send. Called by _render in the pre-sync pass
--- so payload construction (and any subprocess yields it triggers on cache
--- miss) happens before SYNC_START.
-function M._build_at(id, screen_pos)
-    return build_at(id, screen_pos)
-end
-
--- Public: populate the encoding cache for `id` at `src` *asynchronously*,
--- via vim.system's callback form (no .wait()). Returns immediately.
--- on_done() fires from vim.schedule when the cache is populated (or the
--- magick subprocess failed — silently in that case; the on-demand
--- _build_at path will retry sync).
---
--- Used by _core/precompute.lua to warm crop variants without blocking
--- the main thread, so mouse-follow / scroll / typing stay responsive
--- while pre-encoding runs.
---
--- Falls back to the synchronous _build_at when magick isn't on PATH —
--- the pure-Lua decode/resize/encode chain is CPU-bound on the main
--- thread and there's no async equivalent without offloading to a
--- libuv thread (deferred until needed).
-function M._precompute_async(id, src, on_done)
+---Warm the encoding cache for `id` at `src` asynchronously (no .wait()).
+---on_done() fires from vim.schedule when the cache is populated or skipped.
+---Falls back to synchronous build_at when magick is not on PATH.
+---@param id integer
+---@param src { x: integer, y: integer, w: integer, h: integer }?
+---@param on_done fun()
+local function precompute_async(id, src, on_done)
     local s = state[id]
     if not s or not src then
         return on_done()
@@ -323,13 +309,7 @@ function M._precompute_async(id, src, on_done)
         magick.crop_to_png_async(s.full_png, x_px, y_px, w_px, h_px, function(cropped_png)
             if cropped_png and #cropped_png > 0 then
                 local entry = { png = cropped_png, b64 = vim.base64.encode(cropped_png) }
-                lru.put(
-                    s.png_cache_by_src,
-                    s.png_cache_by_src_order,
-                    key,
-                    entry,
-                    _config.read().crop_cache_size
-                )
+                lru.put(s.png_cache_by_src, s.png_cache_by_src_order, key, entry, _config.read().crop_cache_size)
             end
             on_done()
         end)
@@ -349,12 +329,10 @@ function M._precompute_async(id, src, on_done)
     end
 end
 
--- Closure factory: produces a position resolver for placement `id` that the
--- render coordinator can call without knowing about provider internals.
--- Returns a list of position records `{ row, col, src = { x, y, w, h } }`,
--- possibly empty. For ui-mode, a single full-image src is emitted. For
--- editor/buffer modes, the carrier may shrink src to clip against window
--- bounds, and split into multiple entries (one per visible window).
+---Closure factory: produces a position resolver for placement `id`.
+---The returned function returns a list of `{ row, col, src? }` records.
+---@param id integer
+---@return fun(): { row: integer, col: integer, src?: { x: integer, y: integer, w: integer, h: integer } }[]
 local function get_pos_for(id)
     return function()
         local s = state[id]
@@ -378,14 +356,18 @@ local function get_pos_for(id)
     end
 end
 
+---@param query_id integer
+---@return vim.ui.img.Opts?
+local function get_opts(query_id)
+    return state[query_id] and state[query_id].opts
+end
+
+---@param data_or_id string|integer image bytes (string) or existing id (integer)
+---@param opts? vim.ui.img.Opts
+---@return integer id
 function M.set(data_or_id, opts)
-    vim.validate({
-        data_or_id = { data_or_id, { "string", "number" } },
-        opts = { opts, "table", true },
-    })
-    if type(data_or_id) == "string" and not util.is_png_data(data_or_id) then
-        error("alt-img.iterm2: data must be a PNG byte string (matches vim.ui.img)", 2)
-    end
+    vim.validate("data_or_id", data_or_id, { "string", "number" })
+    vim.validate("opts", opts, "table", true)
 
     if type(data_or_id) == "number" then
         -- Update path
@@ -393,31 +375,18 @@ function M.set(data_or_id, opts)
         if not s then
             error("alt-img.iterm2: unknown id " .. tostring(data_or_id), 2)
         end
-        -- v1: don't support relative-changing updates (carrier kind would need
-        -- to be re-created). Preserve the original relative on partial-merge so
-        -- canonicalize's default of 'ui' doesn't clobber 'editor'/'buffer'.
         local upd = canonicalize(opts)
         if not (opts and opts.relative) then
             upd.relative = s.opts.relative
         end
-        -- Explicit guard: if caller tries to change relative, error out.
-        if opts and opts.relative and opts.relative ~= s.opts.relative then
-            error(
-                string.format(
-                    "alt-img.iterm2: cannot change relative on update (was %s, got %s); del and re-create instead",
-                    s.opts.relative,
-                    opts.relative
-                ),
-                2
-            )
-        end
-        -- Capture old dimensions BEFORE merge so we can detect if they actually changed.
+        -- Capture old relative and dimensions BEFORE merge.
+        local old_relative = s.opts.relative
         local old_w, old_h = s.opts.width, s.opts.height
         s.opts = vim.tbl_extend("force", s.opts, upd)
         -- If merge resulted in non-ui without explicit dims, derive from PNG IHDR.
         derive_dims(s.data, s.opts)
         -- Only invalidate encoding caches when dimensions actually changed.
-        -- Position, row/col, zindex, pad, relative (ui-mode only) don't affect encoding.
+        -- Position, row/col, zindex, pad, relative don't affect encoding.
         local dims_changed = s.opts.width ~= old_w or s.opts.height ~= old_h
         if dims_changed then
             s.png_cache_by_src = nil
@@ -428,17 +397,28 @@ function M.set(data_or_id, opts)
             s.full_png = nil
             s.full_png_b64 = nil
         end
-        -- For carrier-managed placements, reposition the carrier so the resolved
-        -- screen pos reflects the new opts (otherwise the float stays put).
-        if s.opts.relative ~= "ui" then
-            require("alt-img._core.carrier").update(M, data_or_id, s.opts)
+        -- Manage carrier lifecycle across relative-mode transitions:
+        --   ui → editor/buffer: register a new carrier.
+        --   editor/buffer → ui: unregister the existing carrier.
+        --   editor/buffer → editor/buffer: update in place (carrier.update
+        --     handles kind swaps internally via unregister+re-register).
+        local carrier = require("alt-img._core.carrier")
+        if old_relative == "ui" and s.opts.relative ~= "ui" then
+            carrier.register(M, data_or_id, s.opts)
+        elseif old_relative ~= "ui" and s.opts.relative == "ui" then
+            carrier.unregister(M, data_or_id)
+        elseif s.opts.relative ~= "ui" then
+            carrier.update(M, data_or_id, s.opts)
         end
         -- Mark dirty; the position-diff in tick() drives clearing automatically.
-        render.invalidate(M, data_or_id)
+        render.invalidate(state[data_or_id], data_or_id)
         render.flush()
         -- Restart precompute when dims changed (cache was just invalidated).
         if dims_changed then
-            require("alt-img._core.precompute").start(M, data_or_id, s.opts)
+            require("alt-img._core.precompute").start(state[data_or_id], data_or_id, s.opts, {
+                build_at = build_at,
+                precompute_async = precompute_async,
+            })
         end
         return data_or_id
     end
@@ -460,16 +440,25 @@ function M.set(data_or_id, opts)
         require("alt-img._core.carrier").register(M, id, state[id].opts)
     end
 
-    render.register(M, id, get_pos_for(id))
+    render.register(state[id], id, get_pos_for(id), {
+        emit_at = emit_at,
+        build_at = build_at,
+        get_opts = get_opts,
+    })
     -- Synchronous initial paint so callers (and tests) see the image immediately.
     render.flush()
     -- Schedule background pre-encoding of cropped variants so the first
     -- partial-visibility scroll doesn't pay the magick / image.encode cost
     -- in the foreground. See _core/precompute.lua.
-    require("alt-img._core.precompute").start(M, id, opts_canonical)
+    require("alt-img._core.precompute").start(state[id], id, opts_canonical, {
+        build_at = build_at,
+        precompute_async = precompute_async,
+    })
     return id
 end
 
+---@param id integer
+---@return vim.ui.img.Opts? opts
 function M.get(id)
     local s = state[id]
     if not s then
@@ -478,13 +467,20 @@ function M.get(id)
     return vim.deepcopy(s.opts)
 end
 
+---@param id integer
+---@return boolean found
 function M.del(id)
     if id == math.huge then
         local any = next(state) ~= nil
-        for k, _ in pairs(state) do
-            require("alt-img._core.precompute").cancel(M, k)
-            require("alt-img._core.carrier").unregister(M, k)
-            render.unregister(M, k)
+        -- Capture tokens and keys before clearing state.
+        local to_cancel = {}
+        for k, s in pairs(state) do
+            to_cancel[#to_cancel + 1] = { token = s, k = k }
+        end
+        for _, entry in ipairs(to_cancel) do
+            require("alt-img._core.precompute").cancel(entry.token, entry.k)
+            require("alt-img._core.carrier").unregister(M, entry.k)
+            render.unregister(entry.token, entry.k)
         end
         state = {}
         if any then
@@ -495,28 +491,24 @@ function M.del(id)
     if not state[id] then
         return false
     end
-    require("alt-img._core.precompute").cancel(M, id)
+    local token = state[id]
+    require("alt-img._core.precompute").cancel(token, id)
     require("alt-img._core.carrier").unregister(M, id)
-    render.unregister(M, id)
+    render.unregister(token, id)
     state[id] = nil
     render.flush()
     return true
 end
 
--- Force every registered placement to re-emit on the next render tick.
--- Use after `:mode`, `:redraw!`, terminal-side clears, or any other event
--- that has wiped image bytes from the terminal compositor without an
--- accompanying nvim grid update. The position-equality elision in the
--- render loop otherwise assumes those pixels are still there.
-function M.refresh()
-    render.refresh()
-end
-
+---@private
+---@param opts? { timeout?: integer }
+---@return boolean supported
+---@return string? msg
 function M._supported(opts)
     opts = opts or {}
     local tp = vim.env.TERM_PROGRAM
     if tp and FAST_TERM_PROGRAMS[tp] then
-        return true, "TERM_PROGRAM=" .. tp
+        return true
     end
 
     -- Probe via XTVERSION (CSI > q). The internal tty.query helper is
@@ -526,7 +518,9 @@ function M._supported(opts)
     local done, ok, msg = false, false, nil
     tty.query("\027[>q", { timeout = timeout }, function(resp)
         if resp and (resp:find("iTerm2", 1, true) or resp:find("WezTerm", 1, true)) then
-            ok, msg = true, resp
+            ok = true
+        elseif resp then
+            msg = "XTVERSION response did not match iTerm2/WezTerm: " .. resp
         end
         done = true
     end)
@@ -536,7 +530,10 @@ function M._supported(opts)
     return ok, msg
 end
 
--- Expose state for testing only.
-M._state = state
+vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function()
+        M.del(math.huge)
+    end,
+})
 
 return M
