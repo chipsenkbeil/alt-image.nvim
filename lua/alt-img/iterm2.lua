@@ -144,7 +144,13 @@ function codec.encode_crop(s, src)
     if not entry then
         local png_bytes, b64 = build_png_cropped(s, src)
         entry = { png = png_bytes, b64 = b64 }
-        lru.put(cs.crop_cache, cs.crop_cache_order, key, entry, require("alt-img._core.config").read().crop_cache_size)
+        lru.put(
+            cs.crop_cache,
+            cs.crop_cache_order,
+            key,
+            entry,
+            require("alt-img._core.precompute").required_lru_size(s.opts)
+        )
     end
     return build_osc(entry.png, entry.b64, src.w, src.h)
 end
@@ -204,7 +210,7 @@ function codec.encode_crop_async(s, src, on_done)
                     cs.crop_cache_order,
                     key,
                     entry,
-                    require("alt-img._core.config").read().crop_cache_size
+                    require("alt-img._core.precompute").required_lru_size(s.opts)
                 )
                 return on_done(build_osc(entry.png, entry.b64, src.w, src.h))
             end

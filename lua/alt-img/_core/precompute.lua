@@ -3,6 +3,20 @@ local M = {}
 ---@type table<string, vim.uv.Timer>
 local active = {}
 
+---Cap on parallel async magick spawns. ImageMagick is internally
+---multi-threaded (one process already uses ~nproc threads), so two
+---parallel spawns hide one process's startup behind the other's compute
+---without doubling thread pressure beyond what the OS handles cleanly.
+---On a single-core box, drop to one to avoid head-of-line blocking.
+---@return integer
+local function default_max_concurrent()
+    local n = vim.uv.available_parallelism()
+    if not n or n <= 1 then
+        return 1
+    end
+    return 2
+end
+
 ---@param token any
 ---@param id integer|any
 ---@return string
@@ -35,6 +49,19 @@ local function enumerate_variations(w, h)
     return out
 end
 
+---LRU capacity needed to hold the precompute output for a placement of
+---`opts.height` cells. `2 * (h - 1)` is the exact variant count; floor at
+---64 so tiny placements still absorb a few one-off viewport-clip crops.
+---@param opts? { height?: integer }
+---@return integer
+function M.required_lru_size(opts)
+    local h = opts and opts.height or 0
+    if type(h) ~= "number" or h < 1 then
+        h = 1
+    end
+    return math.max(64, 2 * (h - 1))
+end
+
 ---Cancel any active precompute for (token, id). Safe to call when
 ---no precompute is scheduled.
 ---@param token any opaque identity
@@ -55,8 +82,9 @@ end
 ---prior precompute for this (token, id) first. No-op when
 ---`precompute_crops` is false, opts is missing dims, the variation list is
 ---empty, or callbacks exposes neither `precompute_async` nor `build_at`.
----Async path runs up to `precompute_max_concurrent` magick subprocesses in
----parallel; sync fallback runs one variant per tick.
+---Async path runs up to `default_max_concurrent()` magick subprocesses in
+---parallel (auto-derived from `vim.uv.available_parallelism()`); sync
+---fallback runs one variant per tick.
 ---@param token any opaque identity (matches what render.register received)
 ---@param id integer placement id
 ---@param opts table canonical opts (with width, height)
@@ -98,10 +126,7 @@ function M.start(token, id, opts, callbacks)
     if type(idle_threshold_ms) ~= "number" or idle_threshold_ms < 0 then
         idle_threshold_ms = 500
     end
-    local max_concurrent = cfg.precompute_max_concurrent
-    if type(max_concurrent) ~= "number" or max_concurrent < 1 then
-        max_concurrent = 2
-    end
+    local max_concurrent = default_max_concurrent()
     local notify = cfg.precompute_notify == true
 
     local total = #variations

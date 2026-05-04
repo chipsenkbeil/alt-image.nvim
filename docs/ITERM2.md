@@ -202,8 +202,9 @@ image.crop_rgba + png.encode      (pure Lua)
 { png = bytes, b64 = base64 }
        │
        ▼
-LRU cache (cs.crop_cache) keyed by "x,y,w,h" string,
-size 256 by default (vim.g.alt_img.crop_cache_size)
+LRU cache (cs.crop_cache) keyed by "x,y,w,h" string;
+size auto-derived per placement from opts.height
+(precompute.required_lru_size, 2*(height-1) floored at 64)
 ```
 
 The OSC 1337 width/height fields are then set to `src.w` / `src.h`

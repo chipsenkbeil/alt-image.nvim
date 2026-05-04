@@ -65,10 +65,6 @@ vim.g.alt_img = {
   -- libsixel CLI for fast sixel encoding. Same shape as `magick`.
   img2sixel = { 'img2sixel' },          -- string | string[] | false
 
-  -- Per-placement LRU max for cached crop encodings (PNG / sixel strings
-  -- keyed by "x,y,w,h" cell rect). Larger = more memory, fewer recompresses.
-  crop_cache_size = 256,
-
   -- Override the sixel logical-vs-physical pixel scale. `nil` = auto-detect
   -- via OSC 1337 ReportCellSize and CSI 14t / 18t / 16t geometry. Set to
   -- 1, 2, … to force a value when auto-detect misreads your terminal.
@@ -87,13 +83,15 @@ vim.g.alt_img = {
   -- Skip the next step if the user has typed / scrolled within this window.
   precompute_idle_threshold_ms = 500,
 
-  -- Max parallel `magick` subprocesses the warmer is allowed to spawn.
-  precompute_max_concurrent = 2,
-
   -- vim.notify on precompute start / finish (debug aid).
   precompute_notify = false,
 }
 ```
+
+The crop LRU sizes itself per-placement from the image's height (it holds
+exactly the precompute output, `2 * (height - 1)` entries, with a 64-entry
+floor). Async `magick` parallelism scales with `vim.uv.available_parallelism()`
+(1 on a single-core box, 2 otherwise). Neither needs a knob.
 
 ## Health
 

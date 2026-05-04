@@ -140,7 +140,13 @@ function codec.encode_crop(s, src)
     local cached = lru.get(cs.crop_cache, cs.crop_cache_order, key)
     if not cached then
         cached = build_sixel_cropped(s, src)
-        lru.put(cs.crop_cache, cs.crop_cache_order, key, cached, require("alt-img._core.config").read().crop_cache_size)
+        lru.put(
+            cs.crop_cache,
+            cs.crop_cache_order,
+            key,
+            cached,
+            require("alt-img._core.precompute").required_lru_size(s.opts)
+        )
     end
     return cached
 end
@@ -205,7 +211,7 @@ function codec.encode_crop_async(s, src, on_done)
                 cs.crop_cache_order,
                 key,
                 sixel_bytes,
-                require("alt-img._core.config").read().crop_cache_size
+                require("alt-img._core.precompute").required_lru_size(s.opts)
             )
             return on_done(sixel_bytes)
         end

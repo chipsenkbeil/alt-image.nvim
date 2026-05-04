@@ -381,9 +381,12 @@ Cache lives in two layers:
 | `cs.full_sixel` | sixel | one full-image DCS string | width/height change |
 | `cs.crop_cache` (LRU) | both | per `"x,y,w,h"` cell-unit key | width/height change, LRU overflow |
 
-LRU size defaults to **256** and is configurable via
-`vim.g.alt_img.crop_cache_size` (`_core/config.lua`). Each entry is one
-encoded payload, well under 100 KB typically.
+LRU size is auto-derived per placement from `opts.height` via
+`_core/precompute.required_lru_size()` — `2 * (height - 1)` (the exact
+precompute output count) with a 64-entry floor. That makes the LRU
+lossless against the precompute warm-up regardless of image size; tiny
+placements stay small, very tall placements scale up. Each entry is
+one encoded payload, well under 100 KB typically.
 
 Module-level caches:
 
