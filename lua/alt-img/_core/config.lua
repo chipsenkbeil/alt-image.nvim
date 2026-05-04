@@ -1,3 +1,9 @@
+---@class alt-img._core.CacheConfig
+---@field enabled? boolean  master switch (default true)
+---@field dir? string  override cache directory (default: stdpath("cache") .. "/alt-img")
+---@field max_bytes? integer  evict oldest-mtime entries past this on write (default 500 MB)
+---@field max_age_days? integer  drop entries older than this on read (nil = no age cap)
+
 ---@class alt-img._core.Config
 ---@field autodetect? string[]  provider names autodetect probes, in order; first supported wins
 ---@field magick? string|string[]|false  magick CLI candidate(s); false disables
@@ -9,6 +15,7 @@
 ---@field precompute_start_delay_ms? integer  ms before first step fires
 ---@field precompute_idle_threshold_ms? integer  skip step if user active within this window
 ---@field precompute_notify? boolean  vim.notify on precompute start/finish
+---@field cache? alt-img._core.CacheConfig  on-disk encode cache
 
 local M = {}
 
@@ -25,6 +32,10 @@ local DEFAULTS = {
     precompute_start_delay_ms = 500,
     precompute_idle_threshold_ms = 500,
     precompute_notify = false,
+    cache = {
+        enabled = true,
+        max_bytes = 500 * 1024 * 1024,
+    },
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_img).

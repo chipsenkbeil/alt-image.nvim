@@ -182,6 +182,90 @@ local function open_scratch(title, lines)
     vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true })
 end
 
+---@type string[]
+local CACHE_SUBCOMMANDS = { "clear", "stats", "path" }
+
+---@param bytes integer
+---@return string  e.g. "1.2 MiB"
+local function fmt_bytes(bytes)
+    local units = { "B", "KiB", "MiB", "GiB", "TiB" }
+    local i = 1
+    local v = bytes
+    while v >= 1024 and i < #units do
+        v = v / 1024
+        i = i + 1
+    end
+    if i == 1 then
+        return string.format("%d %s", v, units[i])
+    end
+    return string.format("%.2f %s", v, units[i])
+end
+
+---@param args string[]
+local function cache_impl(args)
+    local cache = require("alt-img._core.cache")
+    local sub = args[1] or "stats"
+    if sub == "clear" then
+        local opts = {}
+        if args[2] then
+            local n = tonumber(args[2])
+            if n and n >= 0 then
+                opts.older_than_days = n
+            else
+                vim.notify(
+                    "AltImg cache clear: second arg must be a non-negative integer (days). Got: " .. tostring(args[2]),
+                    vim.log.levels.ERROR
+                )
+                return
+            end
+        end
+        local r = cache.clear(opts)
+        vim.notify(
+            string.format(
+                "alt-img cache: removed %d entries (%s)%s",
+                r.entries_removed,
+                fmt_bytes(r.bytes_removed),
+                opts.older_than_days and (" older than " .. opts.older_than_days .. " days") or ""
+            ),
+            vim.log.levels.INFO
+        )
+    elseif sub == "stats" then
+        local s = cache.stats()
+        vim.notify(
+            string.format(
+                "alt-img cache: %d entries, %s on disk%s\n  dir: %s",
+                s.entries,
+                fmt_bytes(s.bytes),
+                cache.is_enabled() and "" or "  (DISABLED)",
+                s.dir
+            ),
+            vim.log.levels.INFO
+        )
+    elseif sub == "path" then
+        vim.notify(cache.path(), vim.log.levels.INFO)
+    else
+        vim.notify(
+            "AltImg cache: unknown subcommand `"
+                .. tostring(sub)
+                .. "`. Try one of: "
+                .. table.concat(CACHE_SUBCOMMANDS, ", "),
+            vim.log.levels.ERROR
+        )
+    end
+end
+
+---@param arg_lead string
+---@return string[]
+local function cache_complete(arg_lead)
+    local out = {}
+    for _, name in ipairs(CACHE_SUBCOMMANDS) do
+        if name:find("^" .. vim.pesc(arg_lead)) then
+            out[#out + 1] = name
+        end
+    end
+    return out
+end
+
 ---@type table<string, alt-img._core.Subcommand>
 M.subcommands = {
     info = {
@@ -195,6 +279,13 @@ M.subcommands = {
         impl = function()
             require("alt-img._core.render").refresh()
         end,
+    },
+    cache = {
+        desc = "On-disk encode cache control. `clear [days]` wipes everything (or only entries older than N days). `stats` reports entry count and total bytes. `path` echoes the cache directory.",
+        impl = function(args)
+            cache_impl(args)
+        end,
+        complete = cache_complete,
     },
 }
 

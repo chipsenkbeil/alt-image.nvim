@@ -23,6 +23,40 @@ local function ensure_caches(cs)
     cs.crop_cache_order = cs.crop_cache_order or {}
 end
 
+---Cache key for the placement's full resized PNG. nil if dims unknown.
+---@param s alt-img._core.provider.State
+---@return string?
+local function png_cache_key_full(s)
+    if not (s.opts.width and s.opts.height) then
+        return nil
+    end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local tw, th = s.opts.width * cw, s.opts.height * ch
+    local cache = require("alt-img._core.cache")
+    return cache.key(cache.input_sha(s), tw, th, "full")
+end
+
+---Cache key for a cropped PNG slice. nil if dims unknown.
+---@param s alt-img._core.provider.State
+---@param src alt-img._core.provider.SrcRect
+---@return string?
+local function png_cache_key_crop(s, src)
+    if not (s.opts.width and s.opts.height) then
+        return nil
+    end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local tw, th = s.opts.width * cw, s.opts.height * ch
+    local x_px, y_px = src.x * cw, src.y * ch
+    local w_px, h_px = src.w * cw, src.h * ch
+    local rect = string.format("%d,%d,%d,%d", x_px, y_px, w_px, h_px)
+    local cache = require("alt-img._core.cache")
+    return cache.key(cache.input_sha(s), tw, th, rect)
+end
+
 ---Decode → resize-to-cell-pixel-grid → cache RGBA pixels for the placement.
 ---@param s alt-img._core.provider.State
 ---@return string rgba, integer w, integer h
@@ -47,13 +81,23 @@ local function ensure_resized(s)
 end
 
 ---Encode the resized pixels back to PNG once and cache it (plus base64).
----Routes through magick when available and dims are known.
+---Routes through the disk cache → magick → pure-Lua fallback chain.
 ---@param s alt-img._core.provider.State
 ---@return string png_bytes, string b64
 local function ensure_full_png(s)
     local cs = s.codec_state
     if cs.full_png and cs.full_png_b64 then
         return cs.full_png, cs.full_png_b64
+    end
+    local cache = require("alt-img._core.cache")
+    local key = png_cache_key_full(s)
+    if key then
+        local cached = cache.lookup(key, ".png")
+        if cached then
+            cs.full_png = cached
+            cs.full_png_b64 = vim.base64.encode(cached)
+            return cs.full_png, cs.full_png_b64
+        end
     end
     local cell_size = require("alt-img._core.cell_size")
     cell_size.query()
@@ -64,6 +108,9 @@ local function ensure_full_png(s)
         if out and #out > 0 then
             cs.full_png = out
             cs.full_png_b64 = vim.base64.encode(out)
+            if key then
+                cache.store(key, ".png", out)
+            end
             return cs.full_png, cs.full_png_b64
         end
     end
@@ -71,6 +118,9 @@ local function ensure_full_png(s)
     local png = require("alt-img._core.png")
     cs.full_png = png.encode(rgba, w, h)
     cs.full_png_b64 = vim.base64.encode(cs.full_png)
+    if key then
+        cache.store(key, ".png", cs.full_png)
+    end
     return cs.full_png, cs.full_png_b64
 end
 
@@ -79,21 +129,35 @@ end
 ---@param src alt-img._core.provider.SrcRect crop rect in cell units
 ---@return string png_bytes, string b64, integer cw_px, integer ch_px
 local function build_png_cropped(s, src)
+    local cache = require("alt-img._core.cache")
+    local key = png_cache_key_crop(s, src)
     local cell_size = require("alt-img._core.cell_size")
     cell_size.query()
     local cw, ch = cell_size.current()
     local x_px, y_px = src.x * cw, src.y * ch
     local w_px, h_px = src.w * cw, src.h * ch
+    if key then
+        local cached = cache.lookup(key, ".png")
+        if cached then
+            return cached, vim.base64.encode(cached), w_px, h_px
+        end
+    end
     local resized_png = ensure_full_png(s)
     local magick = require("alt-img._core.magick")
     local accel = magick.crop_to_png(resized_png, x_px, y_px, w_px, h_px)
     if accel and #accel > 0 then
+        if key then
+            cache.store(key, ".png", accel)
+        end
         return accel, vim.base64.encode(accel), w_px, h_px
     end
     local rgba, full_w, full_h = ensure_resized(s)
     local cropped, cw_px, ch_px = require("alt-img._core.image").crop_rgba(rgba, full_w, full_h, x_px, y_px, w_px, h_px)
     local png = require("alt-img._core.png")
     local png_bytes = png.encode(cropped, cw_px, ch_px)
+    if key then
+        cache.store(key, ".png", png_bytes)
+    end
     return png_bytes, vim.base64.encode(png_bytes), cw_px, ch_px
 end
 
@@ -162,6 +226,16 @@ function codec.encode_full_async(s, on_done)
     if cs.full_png and cs.full_png_b64 then
         return on_done(build_osc(cs.full_png, cs.full_png_b64, s.opts.width, s.opts.height))
     end
+    local cache = require("alt-img._core.cache")
+    local cache_key = png_cache_key_full(s)
+    if cache_key then
+        local cached = cache.lookup(cache_key, ".png")
+        if cached then
+            cs.full_png = cached
+            cs.full_png_b64 = vim.base64.encode(cached)
+            return on_done(build_osc(cs.full_png, cs.full_png_b64, s.opts.width, s.opts.height))
+        end
+    end
     local magick = require("alt-img._core.magick")
     if not (magick.binary() and s.opts.width and s.opts.height) then
         return on_done(nil)
@@ -173,6 +247,9 @@ function codec.encode_full_async(s, on_done)
         if png_bytes and #png_bytes > 0 then
             cs.full_png = png_bytes
             cs.full_png_b64 = vim.base64.encode(png_bytes)
+            if cache_key then
+                cache.store(cache_key, ".png", png_bytes)
+            end
             return on_done(build_osc(cs.full_png, cs.full_png_b64, s.opts.width, s.opts.height))
         end
         on_done(nil)
@@ -189,6 +266,23 @@ function codec.encode_crop_async(s, src, on_done)
     if cs.crop_cache[key] then
         local hit = cs.crop_cache[key]
         return on_done(build_osc(hit.png, hit.b64, src.w, src.h))
+    end
+    local cache = require("alt-img._core.cache")
+    local cache_key = png_cache_key_crop(s, src)
+    if cache_key then
+        local cached = cache.lookup(cache_key, ".png")
+        if cached then
+            local entry = { png = cached, b64 = vim.base64.encode(cached) }
+            local lru = require("alt-img._core.lru")
+            lru.put(
+                cs.crop_cache,
+                cs.crop_cache_order,
+                key,
+                entry,
+                require("alt-img._core.precompute").required_lru_size(s.opts)
+            )
+            return on_done(build_osc(entry.png, entry.b64, src.w, src.h))
+        end
     end
     local magick = require("alt-img._core.magick")
     if not magick.binary() then
@@ -212,6 +306,9 @@ function codec.encode_crop_async(s, src, on_done)
                     entry,
                     require("alt-img._core.precompute").required_lru_size(s.opts)
                 )
+                if cache_key then
+                    cache.store(cache_key, ".png", cropped_png)
+                end
                 return on_done(build_osc(entry.png, entry.b64, src.w, src.h))
             end
             on_done(nil)
@@ -227,6 +324,10 @@ function codec.encode_crop_async(s, src, on_done)
             end
             cs.full_png = png_bytes
             cs.full_png_b64 = vim.base64.encode(png_bytes)
+            local full_key = png_cache_key_full(s)
+            if full_key then
+                cache.store(full_key, ".png", png_bytes)
+            end
             do_crop()
         end)
     end

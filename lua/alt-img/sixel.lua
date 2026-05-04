@@ -35,6 +35,45 @@ local function sixel_scale()
     return require("alt-img._core.pixel_scale").current()
 end
 
+---Cache key for the placement's full sixel output. Returns nil if dims
+---aren't known yet (e.g. opts.width missing) — the disk cache is keyed by
+---pixel target, not opts, so missing dims means we can't form a stable key.
+---@param s alt-img._core.provider.State
+---@return string? key, integer? target_w_px, integer? target_h_px
+local function sixel_cache_key_full(s)
+    if not (s.opts.width and s.opts.height) then
+        return nil
+    end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local scale = sixel_scale()
+    local tw, th = s.opts.width * cw * scale, s.opts.height * ch * scale
+    local cache = require("alt-img._core.cache")
+    return cache.key(cache.input_sha(s), tw, th, "full"), tw, th
+end
+
+---Cache key for a cropped sixel slice. Same dim-availability constraint as
+---sixel_cache_key_full.
+---@param s alt-img._core.provider.State
+---@param src alt-img._core.provider.SrcRect
+---@return string?
+local function sixel_cache_key_crop(s, src)
+    if not (s.opts.width and s.opts.height) then
+        return nil
+    end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local scale = sixel_scale()
+    local tw, th = s.opts.width * cw * scale, s.opts.height * ch * scale
+    local x_px, y_px = src.x * cw * scale, src.y * ch * scale
+    local w_px, h_px = src.w * cw * scale, src.h * ch * scale
+    local rect = string.format("%d,%d,%d,%d", x_px, y_px, w_px, h_px)
+    local cache = require("alt-img._core.cache")
+    return cache.key(cache.input_sha(s), tw, th, rect)
+end
+
 ---@param s alt-img._core.provider.State
 ---@return string rgba, integer w, integer h
 local function ensure_resized(s)
@@ -62,12 +101,24 @@ local function build_sixel(s)
     if cs.full_sixel then
         return cs.full_sixel
     end
+    local cache = require("alt-img._core.cache")
+    local key = sixel_cache_key_full(s)
+    if key then
+        local cached = cache.lookup(key, ".sixel")
+        if cached then
+            cs.full_sixel = cached
+            return cached
+        end
+    end
     local scale = sixel_scale()
     local rgba, w, h = ensure_resized(s)
     if scale > 1 then
         rgba, w, h = require("alt-img._core.image").resize(rgba, w, h, w * scale, h * scale)
     end
     cs.full_sixel = require("alt-img.sixel._encode").encode_sixel_dispatch(rgba, w, h)
+    if key then
+        cache.store(key, ".sixel", cs.full_sixel)
+    end
     return cs.full_sixel
 end
 
@@ -75,6 +126,14 @@ end
 ---@param src alt-img._core.provider.SrcRect
 ---@return string sixel
 local function build_sixel_cropped(s, src)
+    local cache = require("alt-img._core.cache")
+    local key = sixel_cache_key_crop(s, src)
+    if key then
+        local cached = cache.lookup(key, ".sixel")
+        if cached then
+            return cached
+        end
+    end
     local cell_size = require("alt-img._core.cell_size")
     cell_size.query()
     local cw, ch = cell_size.current()
@@ -87,7 +146,11 @@ local function build_sixel_cropped(s, src)
         rgba, w, h = require("alt-img._core.image").resize(rgba, w, h, w * scale, h * scale)
     end
     local cropped, cw_px, ch_px = require("alt-img._core.image").crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
-    return require("alt-img.sixel._encode").encode_sixel_dispatch(cropped, cw_px, ch_px)
+    local out = require("alt-img.sixel._encode").encode_sixel_dispatch(cropped, cw_px, ch_px)
+    if key then
+        cache.store(key, ".sixel", out)
+    end
+    return out
 end
 
 local codec = {}
@@ -148,6 +211,15 @@ function codec.encode_full_async(s, on_done)
     if not (s.opts.width and s.opts.height) then
         return on_done(nil)
     end
+    local cache = require("alt-img._core.cache")
+    local cache_key = sixel_cache_key_full(s)
+    if cache_key then
+        local cached = cache.lookup(cache_key, ".sixel")
+        if cached then
+            cs.full_sixel = cached
+            return on_done(cached)
+        end
+    end
     local chafa = require("alt-img.sixel._chafa")
     local libsixel = require("alt-img.sixel._libsixel")
     local magick = require("alt-img._core.magick")
@@ -155,6 +227,9 @@ function codec.encode_full_async(s, on_done)
     local function deliver(out)
         if out and #out > 0 then
             cs.full_sixel = out
+            if cache_key then
+                cache.store(cache_key, ".sixel", out)
+            end
             return on_done(out)
         end
         on_done(nil)
@@ -223,6 +298,22 @@ function codec.encode_crop_async(s, src, on_done)
     if cs.crop_cache[key] then
         return on_done(cs.crop_cache[key])
     end
+    local cache = require("alt-img._core.cache")
+    local cache_key = sixel_cache_key_crop(s, src)
+    if cache_key then
+        local cached = cache.lookup(cache_key, ".sixel")
+        if cached then
+            local lru = require("alt-img._core.lru")
+            lru.put(
+                cs.crop_cache,
+                cs.crop_cache_order,
+                key,
+                cached,
+                require("alt-img._core.precompute").required_lru_size(s.opts)
+            )
+            return on_done(cached)
+        end
+    end
 
     local chafa = require("alt-img.sixel._chafa")
     local libsixel = require("alt-img.sixel._libsixel")
@@ -238,6 +329,9 @@ function codec.encode_crop_async(s, src, on_done)
                 out,
                 require("alt-img._core.precompute").required_lru_size(s.opts)
             )
+            if cache_key then
+                cache.store(cache_key, ".sixel", out)
+            end
             return on_done(out)
         end
         on_done(nil)

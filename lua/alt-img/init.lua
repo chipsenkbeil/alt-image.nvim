@@ -20,6 +20,15 @@ end
 
 local M = {}
 
+---On-disk cache surface. Persists encoded sixel DCS / iterm2 PNG payloads
+---across nvim sessions, keyed by sha256 of the input bytes plus target
+---dimensions and crop rect. See `:AltImg cache` for the user command.
+M.cache = setmetatable({}, {
+    __index = function(_, k)
+        return require("alt-img._core.cache")[k]
+    end,
+})
+
 ---Resolved provider used by the autodetect dispatch. Forces the resolution
 ---if not yet cached. Used by `:checkhealth alt-img` and the manual smoke
 ---harness to identify which provider is in play.

@@ -85,6 +85,18 @@ vim.g.alt_img = {
 
   -- vim.notify on precompute start / finish (debug aid).
   precompute_notify = false,
+
+  -- On-disk encode cache. Sixel DCS and resized/cropped PNGs are persisted
+  -- under `stdpath('cache') .. '/alt-img/'`, keyed by sha256 of input bytes
+  -- + target pixel dims + crop rect. The same image at the same dims hits
+  -- the cache across nvim sessions, machines (if you sync the dir), and
+  -- between the iterm2 and sixel codecs.
+  cache = {
+    enabled    = true,
+    dir        = nil,                 -- string | nil  (nil = stdpath('cache') .. '/alt-img')
+    max_bytes  = 500 * 1024 * 1024,   -- evict oldest-mtime entries past this on write
+    max_age_days = nil,               -- integer | nil (drop entries older than this on read)
+  },
 }
 ```
 
@@ -118,6 +130,20 @@ completion lists the available subcommands.
 |---|---|
 | `:AltImg info` | Print a diagnostic dump: terminal env, cell pixel size, sixel pixel scale (OSC 1337 + CSI 14t/18t/16t breakdown plus the effective value), external-tool detection, and every active placement with its resolved opts and target pixel dims. The first stop when something looks wrong. |
 | `:AltImg refresh` | Force every placement to re-emit on the next render tick. Use after `:mode`, `:redraw!`, or any other terminal-side wipe that has cleared image cells without alt-img noticing. Caches stay warm — no re-encoding. |
+| `:AltImg cache stats` | Report cache entry count, total bytes, and the resolved cache directory. |
+| `:AltImg cache clear [days]` | Delete every cache entry, or only entries older than `[days]` if a non-negative integer is given. |
+| `:AltImg cache path` | Echo the absolute cache directory. |
+
+The cache is also reachable from Lua:
+
+```lua
+require('alt-img').cache.stats()                       -- { entries, bytes, dir }
+require('alt-img').cache.clear()                       -- wipe everything
+require('alt-img').cache.clear({ older_than_days = 7 })
+require('alt-img').cache.path()                        -- absolute path
+require('alt-img').cache.disable()                     -- in-process toggle (this nvim only)
+require('alt-img').cache.enable()
+```
 
 ## Development
 
