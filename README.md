@@ -41,16 +41,38 @@ the boundary; convert to PNG first if you need to feed in JPEG / WebP / etc.
 
 ## Install
 
-`lazy.nvim`:
+Pin to the latest tagged release for stability — `master` moves and may break.
+
+`lazy.nvim` (pinned to `v0.1.0`, recommended):
 
 ```lua
-{ 'chipsenkbeil/alt-img.nvim', config = function()
+{ 
+  'chipsenkbeil/alt-img.nvim', tag = 'v0.1.0', config = function()
     vim.ui.img = require('alt-img')
   end,
 }
 ```
 
-`vim.pack`:
+`lazy.nvim` (latest commit on `master`):
+
+```lua
+{ 
+  'chipsenkbeil/alt-img.nvim', branch = 'master', config = function()
+    vim.ui.img = require('alt-img')
+  end,
+}
+```
+
+`vim.pack` (pinned to `v0.1.0`, recommended):
+
+```lua
+vim.pack.add({
+  { src = 'https://github.com/chipsenkbeil/alt-img.nvim', version = 'v0.1.0' },
+})
+vim.ui.img = require('alt-img')
+```
+
+`vim.pack` (latest commit on `master`):
 
 ```lua
 vim.pack.add({ 'https://github.com/chipsenkbeil/alt-img.nvim' })
