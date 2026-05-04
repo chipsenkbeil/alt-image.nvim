@@ -17,7 +17,9 @@ local _zlib_uncompress_inited = false
 local function libz_candidates()
     local cfg = require("alt-img._core.config").read()
     local v = cfg.libz
-    if v == false then
+    -- Falsy (nil/false) → disabled. Empty table also disabled (the
+    -- ffi.load for-loop below just iterates zero times and finds no lib).
+    if not v then
         return nil
     end
     if type(v) == "string" then

@@ -59,22 +59,23 @@ vim.g.alt_img = {
   autodetect = { 'iterm2', 'sixel' },
 
   -- ImageMagick CLI for fast crop + (re)encode. Single name, an ordered
-  -- list of candidates (first executable wins), or `false` to disable.
-  magick = { 'magick', 'convert' },     -- string | string[] | false
+  -- list of candidates (first executable wins), or any falsy value
+  -- (`false` / `nil` / `{}`) to disable.
+  magick = { 'magick', 'convert' },     -- string | string[] | false | nil
 
   -- libsixel CLI for fast sixel encoding. Same shape as `magick`.
-  img2sixel = { 'img2sixel' },          -- string | string[] | false
+  img2sixel = { 'img2sixel' },          -- string | string[] | false | nil
 
   -- libz dylib(s) to load via LuaJIT FFI for real DEFLATE PNG. Same shape
-  -- as `magick` — first loadable name wins; `false` forces the pure-Lua
+  -- as `magick` — first loadable name wins; falsy forces the pure-Lua
   -- inflater (slower but always available, useful for testing).
-  libz = { 'z', 'zlib', 'zlib1', 'libz' },  -- string | string[] | false
+  libz = { 'z', 'zlib', 'zlib1', 'libz' },  -- string | string[] | false | nil
 
   -- chafa CLI for transparent-PNG sixel encoding. Only relevant for the
   -- sixel provider; it's preferred when a PNG has alpha because chafa is
   -- the only external encoder that preserves transparency. Same shape as
   -- `magick`.
-  chafa = { 'chafa' },                  -- string | string[] | false
+  chafa = { 'chafa' },                  -- string | string[] | false | nil
 
   -- Override the sixel logical-vs-physical pixel scale. `nil` = auto-detect
   -- via OSC 1337 ReportCellSize and CSI 14t / 18t / 16t geometry. Set to

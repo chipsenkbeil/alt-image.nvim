@@ -16,7 +16,8 @@ end
 ---is usable.
 ---  - falsy (`false` / `nil`) → nil (tool path disabled).
 ---  - `string`                → that exact binary if executable, else nil.
----  - `string[]`              → first executable candidate, else nil.
+---  - `string[]`              → first executable candidate, else nil
+---                              (empty list → nil, also "disabled").
 ---@param cfg string|string[]|false|nil
 ---@return string?
 function M.resolve(cfg)
