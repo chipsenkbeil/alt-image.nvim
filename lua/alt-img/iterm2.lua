@@ -337,6 +337,14 @@ end
 ---@return boolean, string?
 function codec.probe(opts)
     opts = opts or {}
+    -- Windows Terminal does not implement the iTerm2 OSC 1337 inline image
+    -- protocol. Skip the XTVERSION probe — its reply (e.g. "Microsoft.Terminal")
+    -- never matches our regex, so the probe just times out at 1000+ ms on
+    -- the first call into autodetect.matches() (and again on every direct
+    -- iterm2._supported() in `:AltImg info`). Short-circuit instead.
+    if vim.env.WT_SESSION and vim.env.WT_SESSION ~= "" then
+        return false, "Windows Terminal does not implement iTerm2 inline images"
+    end
     local tp = vim.env.TERM_PROGRAM
     if tp and FAST_TERM_PROGRAMS[tp] then
         return true
