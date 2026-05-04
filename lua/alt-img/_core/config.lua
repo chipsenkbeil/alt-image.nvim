@@ -2,6 +2,7 @@
 ---@field autodetect? string[]  provider names autodetect probes, in order; first supported wins
 ---@field magick? string|string[]|false  magick CLI candidate(s); false disables
 ---@field img2sixel? string|string[]|false  img2sixel CLI candidate(s); false disables
+---@field chafa? string|string[]|false  chafa CLI candidate(s); preferred for transparent PNGs
 ---@field sixel_pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
 ---@field precompute_crops? boolean  background pre-encode on set()
 ---@field precompute_interval_ms? integer  ms between precompute steps
@@ -16,8 +17,9 @@ local M = {}
 ---@type alt-img._core.Config
 local DEFAULTS = {
     autodetect = { "iterm2", "sixel" },
-    magick = { "magick", "convert" },
+    chafa = { "chafa" },
     img2sixel = { "img2sixel" },
+    magick = { "magick", "convert" },
     precompute_crops = true,
     precompute_interval_ms = 30,
     precompute_start_delay_ms = 500,

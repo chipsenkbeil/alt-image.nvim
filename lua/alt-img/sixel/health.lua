@@ -34,6 +34,28 @@ function M.check()
                 .. "of alt-img.nvim. Images may not render. Tracked in README."
         )
     end
+
+    -- Transparent-PNG accelerator. magick / img2sixel both flatten alpha
+    -- against a background color; chafa preserves it (P2=1, no bits at
+    -- transparent positions).
+    local chafa = require("alt-img.sixel._chafa")
+    local libsixel = require("alt-img.sixel._libsixel")
+    local magick = require("alt-img._core.magick")
+    if chafa.binary() then
+        h.ok("chafa: " .. chafa.binary() .. " (preferred encoder for transparent PNGs)")
+    elseif libsixel.binary() or magick.binary() then
+        h.warn(
+            "chafa: not found. With magick/img2sixel only, PNG alpha is flattened "
+                .. "to the tool's background color (default black). Install chafa "
+                .. "to preserve transparency, or pick a tool background that matches "
+                .. "your terminal's background color."
+        )
+    else
+        h.info(
+            "chafa: not found (and no other sixel encoder configured); the pure-Lua "
+                .. "encoder handles transparency correctly but is slower."
+        )
+    end
 end
 
 return M

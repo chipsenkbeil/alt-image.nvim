@@ -52,6 +52,26 @@ local function tooling(h)
         h.info("libsixel: not found " .. "(set vim.g.alt_img.img2sixel or install)")
     end
 
+    local chafa = require("alt-img.sixel._chafa").binary()
+    if chafa then
+        h.ok("chafa: " .. chafa .. " (preserves PNG transparency in sixel output)")
+    elseif libsixel or magick then
+        -- chafa is the only external sixel encoder that preserves alpha. With
+        -- only img2sixel/magick available, alpha-bearing PNGs render with
+        -- transparent regions flattened to the tool's background color
+        -- (default black). The pure-Lua tail still preserves alpha but is
+        -- slower; the dispatch reaches it only when every external tool fails.
+        h.warn(
+            "chafa: not found — magick/img2sixel will flatten PNG alpha against "
+                .. "their background color (default black), so transparent regions "
+                .. "render as opaque black. Install chafa for proper transparency, "
+                .. "or set your terminal background color to match what you want "
+                .. "the alpha pixels to appear as."
+        )
+    else
+        h.info("chafa: not found (and no other sixel encoder configured); pure-Lua encoder will run.")
+    end
+
     local png = require("alt-img._core.png")
     if png.has_libz() then
         h.ok("PNG encoder: libz DEFLATE compression active")

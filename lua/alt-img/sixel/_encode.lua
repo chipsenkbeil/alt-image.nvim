@@ -227,7 +227,11 @@ local function _encode_sixel(rgba, w, h)
     local palette, indexed = _quantize_packed(pixel_colors, n_pixels)
 
     local out = {}
-    out[#out + 1] = string.format('\027Pq"1;1;%d;%d', w, h)
+    -- P2=1 leaves 0-bit pixels untouched, so transparent regions show
+    -- the terminal background. Default (P2=0) lets some terminals (Windows
+    -- Terminal) fill them with palette `#0`, which varies per-crop because
+    -- it's whichever opaque color `_pack_pixels` happens to scan first.
+    out[#out + 1] = string.format('\027P0;1;0q"1;1;%d;%d', w, h)
 
     for i, color in ipairs(palette) do
         local r_pct = math.floor(color[1] * 100 / 255 + 0.5)
@@ -328,37 +332,48 @@ local function _encode_sixel(rgba, w, h)
     return table.concat(out)
 end
 
----Encode an RGBA buffer to a sixel DCS string. Priority chain (toggle each
----via `vim.g.alt_img.{img2sixel,magick}`): img2sixel → magick/convert →
----pure-Lua `_encode_sixel`. The external tools want PNG on stdin, so RGBA
----input pays one png.encode hop unless we hit the libz-less magick raw-RGBA
----fast path.
+---Encode an RGBA buffer to a sixel DCS string. Priority chain:
+---chafa → img2sixel (libsixel) → magick/convert → pure-Lua `_encode_sixel`.
+---chafa is preferred because it's the only external encoder that preserves
+---PNG alpha (P2=1, no bits at transparent positions); the others flatten
+---alpha against a background color (default black). The pure-Lua tail also
+---preserves alpha. External tools all want PNG on stdin, so RGBA input pays
+---one png.encode hop unless we fall through to the magick raw-RGBA fast
+---path (only worth taking when chafa and libsixel are both unavailable).
 ---@param rgba string
 ---@param w_px integer
 ---@param h_px integer
 ---@return string sixel DCS
 function M.encode_sixel_dispatch(rgba, w_px, h_px)
-    local magick = require("alt-img._core.magick")
-    local libsixel = require("alt-img.sixel._libsixel")
     local png = require("alt-img._core.png")
+    local chafa = require("alt-img.sixel._chafa")
+    local libsixel = require("alt-img.sixel._libsixel")
+    local magick = require("alt-img._core.magick")
+
+    local has_chafa = chafa.binary() ~= nil
     local has_libsixel = libsixel.binary() ~= nil
     local has_magick = magick.binary() ~= nil
 
-    -- Without libz, png.encode emits uncompressed stored-block PNGs (~raw
-    -- RGBA size). The PNG hop then dominates the pipeline. magick can read
-    -- raw RGBA directly via `-size WxH -depth 8 RGBA:-`, so prefer that
-    -- when we can. img2sixel doesn't have an equivalent raw-input mode.
-    if has_magick and not png.has_libz() then
+    -- Magick raw-RGBA fast path: when libz is missing png.encode emits stored
+    -- (uncompressed) blocks, so the PNG hop dominates. Only worth taking when
+    -- magick is the only subprocess tool we'd reach — chafa/libsixel both
+    -- need PNG anyway, so once we've paid png.encode they're cheaper to chain.
+    if has_magick and not has_chafa and not has_libsixel and not png.has_libz() then
         local out = magick.encode_sixel_from_rgba(rgba, w_px, h_px)
         if out and #out > 0 then
             return out
         end
     end
 
-    -- Both external tools want PNG on stdin; encode once and try each in turn.
     local png_bytes
-    if has_libsixel or has_magick then
+    if has_chafa or has_libsixel or has_magick then
         png_bytes = png.encode(rgba, w_px, h_px)
+    end
+    if has_chafa and png_bytes then
+        local out = chafa.encode_sixel(png_bytes)
+        if out and #out > 0 then
+            return out
+        end
     end
     if has_libsixel and png_bytes then
         local out = libsixel.encode_sixel(png_bytes)

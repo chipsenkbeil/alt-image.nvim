@@ -123,12 +123,23 @@ function M.new(codec)
             return on_done()
         end
         local full = is_full_rect(src, opts)
+        -- The async paths exist only when an external accelerator (magick) is
+        -- present. They signal "I did nothing" by passing nil to on_done; in
+        -- that case fall through to the sync build so the cache still warms
+        -- via the pure-Lua encoder rather than leaving on-demand crops to
+        -- block the UI thread later.
         if full and codec.encode_full_async then
-            codec.encode_full_async(s, function()
+            codec.encode_full_async(s, function(bytes)
+                if not bytes then
+                    pcall(build_at, id, { row = 1, col = 1, src = src })
+                end
                 on_done()
             end)
         elseif (not full) and codec.encode_crop_async then
-            codec.encode_crop_async(s, src, function()
+            codec.encode_crop_async(s, src, function(bytes)
+                if not bytes then
+                    pcall(build_at, id, { row = 1, col = 1, src = src })
+                end
                 on_done()
             end)
         else
