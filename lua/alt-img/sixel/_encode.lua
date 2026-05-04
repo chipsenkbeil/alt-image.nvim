@@ -14,6 +14,7 @@ local function _median_cut(colors, max_colors)
 
     -- Split boxes until we have enough
     while #boxes < max_colors do
+        require("alt-img._core.async").maybe_yield({ phase = "quantize", done = #boxes, total = max_colors })
         -- Find box with largest range to split, caching split channel
         local best_idx = 1
         local best_range = -1
@@ -248,6 +249,7 @@ local function _encode_sixel(rgba, w, h)
     local active_set = {}
 
     for band_y = 0, n_bands - 1 do
+        require("alt-img._core.async").maybe_yield({ phase = "encode", done = band_y, total = n_bands })
         local y_start = band_y * 6
 
         for i = 1, active_colors[0] do

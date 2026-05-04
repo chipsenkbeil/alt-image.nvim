@@ -190,6 +190,50 @@ function codec.invalidate(s)
 end
 
 ---@param s alt-img._core.provider.State
+---@return boolean
+function codec.has_cached_full(s)
+    local cs = s.codec_state
+    if cs and cs.full_png and cs.full_png_b64 then
+        return true
+    end
+    -- magick available means encode_full uses the subprocess fast path.
+    if require("alt-img._core.magick").binary() then
+        return true
+    end
+    if not (s.opts.width and s.opts.height) then
+        return true -- no dims yet → encode_full is a no-op
+    end
+    local cache = require("alt-img._core.cache")
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local key = cache.key(cache.input_sha(s), s.opts.width * cw, s.opts.height * ch, "full")
+    return cache.lookup(key, ".png") ~= nil
+end
+
+---@param s alt-img._core.provider.State
+---@param src alt-img._core.provider.SrcRect
+---@return boolean
+function codec.has_cached_crop(s, src)
+    local cs = s.codec_state
+    if cs and cs.crop_cache then
+        local key = string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
+        if cs.crop_cache[key] then
+            return true
+        end
+    end
+    if require("alt-img._core.magick").binary() then
+        return true
+    end
+    local key = png_cache_key_crop(s, src)
+    if not key then
+        return true
+    end
+    local cache = require("alt-img._core.cache")
+    return cache.lookup(key, ".png") ~= nil
+end
+
+---@param s alt-img._core.provider.State
 ---@return string?
 function codec.encode_full(s)
     local png_bytes, b64 = ensure_full_png(s)

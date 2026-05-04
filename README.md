@@ -65,26 +65,26 @@ vim.g.alt_img = {
   -- libsixel CLI for fast sixel encoding. Same shape as `magick`.
   img2sixel = { 'img2sixel' },          -- string | string[] | false
 
+  -- chafa CLI for transparent-PNG sixel encoding. Only relevant for the
+  -- sixel provider; it's preferred when a PNG has alpha because chafa is
+  -- the only external encoder that preserves transparency. Same shape as
+  -- `magick`.
+  chafa = { 'chafa' },                  -- string | string[] | false
+
   -- Override the sixel logical-vs-physical pixel scale. `nil` = auto-detect
   -- via OSC 1337 ReportCellSize and CSI 14t / 18t / 16t geometry. Set to
   -- 1, 2, … to force a value when auto-detect misreads your terminal.
   sixel_pixel_scale = nil,              -- integer | nil
 
   -- Background pre-encode of crop variants on `set()` so subsequent partial
-  -- redraws hit warm cache. `false` disables the warmer entirely.
-  precompute_crops = true,
-
-  -- Idle ms between successive precompute steps.
-  precompute_interval_ms = 30,
-
-  -- Delay after `set()` before the first precompute step fires.
-  precompute_start_delay_ms = 500,
-
-  -- Skip the next step if the user has typed / scrolled within this window.
-  precompute_idle_threshold_ms = 500,
-
-  -- vim.notify on precompute start / finish (debug aid).
-  precompute_notify = false,
+  -- redraws hit warm cache. `enabled = false` disables the warmer entirely.
+  precompute = {
+    enabled            = true,
+    interval_ms        = 30,    -- ms between successive precompute steps
+    start_delay_ms     = 500,   -- ms after set() before the first step fires
+    idle_threshold_ms  = 500,   -- skip next step if user typed/scrolled within this window
+    notify             = false, -- vim.notify on precompute start / finish (debug aid)
+  },
 
   -- On-disk encode cache. Sixel DCS and resized/cropped PNGs are persisted
   -- under `stdpath('cache') .. '/alt-img/'`, keyed by sha256 of input bytes
@@ -97,6 +97,22 @@ vim.g.alt_img = {
     max_bytes  = 500 * 1024 * 1024,   -- evict oldest-mtime entries past this on write
     max_age_days = nil,               -- integer | nil (drop entries older than this on read)
   },
+
+  -- Loading-state placeholder. Drawn in the cell rectangle while a slow
+  -- pure-Lua encode runs (i.e. when neither magick nor libz is available
+  -- to accelerate decode/encode). A rounded box outline + Braille spinner
+  -- + percent caption animate until the image is ready. `set()` returns
+  -- immediately; the placeholder lives in the carrier (float buffer for
+  -- relative=editor, virt_lines for relative=buffer, transient float for
+  -- relative=ui) and is replaced when the encoded image bytes emit.
+  placeholder = {
+    enabled              = true,
+    delay_ms             = 100,         -- skip placeholder for fast encodes
+    spinner_interval_ms  = 120,         -- spinner glyph advance cadence
+    box                  = 'rounded',   -- 'rounded'|'single'|'dotted'|'heavy'|'none'
+    spinner              = 'braille',   -- 'braille'|'quarter'|'half'|'bar'|'fade'|'classic'
+    show_percent         = true,        -- caption '⣾ 34%' vs just '⣾'
+  },
 }
 ```
 
@@ -104,6 +120,16 @@ The crop LRU sizes itself per-placement from the image's height (it holds
 exactly the precompute output, `2 * (height - 1)` entries, with a 64-entry
 floor). Async `magick` parallelism scales with `vim.uv.available_parallelism()`
 (1 on a single-core box, 2 otherwise). Neither needs a knob.
+
+### Placeholder highlight
+
+The placeholder uses the `AltImgPlaceholder` highlight group. Its default is
+`:hi default link AltImgPlaceholder Comment`, so the box renders dim by
+default. Override with:
+
+```lua
+vim.api.nvim_set_hl(0, 'AltImgPlaceholder', { fg = '#7287fd', italic = true })
+```
 
 ## Health
 

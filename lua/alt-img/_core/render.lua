@@ -24,6 +24,9 @@ local function tick()
     local initially_dirty = {}
     for _, p in ipairs(registry.all()) do
         local positions = p.get_pos() or {}
+        if p.callbacks.notify_positions then
+            p.callbacks.notify_positions(positions)
+        end
         p.next_positions = positions
         if not registry.positions_equal(positions, p.last_positions) or p.force_redraw then
             need_clear = true
@@ -152,6 +155,8 @@ vim.api.nvim_create_autocmd({
     "TabEnter",
     "ModeChanged",
     "CmdlineLeave",
+    "FocusGained",
+    "FocusLost",
 }, {
     group = AUGROUP,
     callback = function()

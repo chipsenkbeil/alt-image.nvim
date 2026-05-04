@@ -41,10 +41,12 @@ lua/alt-img/
     │   └── positions.lua       -- screen-position resolver
     ├── precompute.lua          -- background crop-variant warmer
     ├── activity.lua            -- last-user-activity timestamp
+    ├── async.lua               -- coroutine driver for slow pure-Lua encodes
     ├── autodetect.lua          -- iterm2 vs sixel probe
     ├── cmd.lua                 -- :AltImg user-command dispatch
     ├── cell_size.lua           -- CSI 16t cell pixel-size cache
     ├── pixel_scale.lua         -- sixel logical/physical scale auto-detect
+    ├── placeholder.lua         -- loading placeholder text + animation timer
     ├── clip.lua                -- viewport-clipping math
     ├── png_header.lua          -- PNG IHDR dimension parser
     ├── term_io.lua             -- nvim_ui_send wrapper
@@ -579,7 +581,90 @@ Nvim's own `'termsync'` option is force-disabled within the block
 
 ---
 
-## 13. Verifying behavior
+## 13. Loading placeholders
+
+When the codec has no fast path available (no `magick`, no `img2sixel`, no
+`chafa`, no libz, and the disk cache is cold), `codec.encode_full` falls
+back to the pure-Lua INFLATE → resize → quantize → sixel-encode pipeline
+which can take seconds. The engine routes those calls through
+`_core/async.lua` so the main event loop stays responsive.
+
+```
+provider.set(data, opts)
+       │
+       ▼
+codec.has_cached_full(s)? ─── true ──► render.flush()  (existing sync path)
+       │
+       false
+       ▼
+state[id].codec_state.encode_handle = async.run(
+    function() return codec.encode_full(s) end,    -- pure-Lua hot loops
+    on_progress = …                                --   yield via
+                  cs.encode_progress = p,          --   async.maybe_yield()
+                  placeholder.update(provider, id, p),
+    on_done     = on_encode_done(id, bytes, err))
+       │
+       ▼
+vim.defer_fn(placeholder.delay_ms, function()
+    if state[id] and state[id].codec_state.encode_handle == handle then
+        placeholder.show(provider, id, opts)        -- box + spinner
+    end
+end)
+       │
+       │ (set() returns immediately)
+       ▼
+on_encode_done(id, bytes, err):
+    if err: placeholder.set_errored(provider, id) ; vim.notify_once
+    else:   placeholder.hide(provider, id)
+            render.invalidate + render.flush         -- image bytes emit
+```
+
+Yield checkpoints inside the encoder hot loops:
+
+| Stage | Cadence |
+|---|---|
+| `_core/png.lua` `inflate` | per deflate block |
+| `_core/image.lua` `resize` | every 32 output rows |
+| `sixel/_encode.lua` median-cut | per split iteration |
+| `sixel/_encode.lua` band emit | per 6-row band |
+
+Each checkpoint calls `async.maybe_yield(progress)` which yields only
+when `coroutine.running()` is non-nil — synchronous callers (precompute
+warmer fallback, smoke tests) take the same path with no yield overhead.
+
+`build_at` short-circuits to `nil` while `cs.encode_handle` is set, so any
+render tick that fires during a load is a no-op for that placement (no
+duplicate sync encode).
+
+Placeholder rendering is owned by `_core/placeholder.lua`:
+- `show(provider, id, opts)` writes box + spinner lines into the carrier
+  (`relative=editor` → existing float buffer, `relative=buffer` →
+  `virt_lines` on the existing extmark, `relative=ui` → a new transient
+  float opened by `carrier.register_ui_placeholder`).
+- A single shared `vim.uv.new_timer` advances spinner glyphs every
+  `spinner_interval_ms` (default 120 ms) across all loading placements.
+- `update(provider, id, progress)` stashes phase/done/total for the
+  next animation tick to compute the weighted percent caption.
+- `hide(provider, id)` clears the carrier text (closes transient ui float,
+  resets virt_lines, clears float buffer).
+- `set_errored(provider, id)` flips the entry's caption to `! error` and
+  freezes the spinner.
+
+Position tracking during loading: `_core/render.lua`'s tick passes
+`positions` to an optional `notify_positions` callback on each placement's
+callbacks table; the engine's `set()` wires this to call
+`placeholder.reposition(provider, id, positions)`. For `editor`/`buffer`
+the placeholder text moves with its carrier (extmark, float window) for
+free; for `ui` the call resizes/reposition the transient float via
+`nvim_win_set_config`.
+
+The whole subsystem is gated by `vim.g.alt_img.placeholder.enabled`. With
+it disabled, async encoding still happens (slow paths still don't block);
+only the visible box+spinner is suppressed.
+
+---
+
+## 14. Verifying behavior
 
 - `make smoke-test` — interactive: launches nvim with `manual_init.lua`,
   then `:AltImgTest demo {ui|editor|buffer}`, `:AltImg info`, scroll

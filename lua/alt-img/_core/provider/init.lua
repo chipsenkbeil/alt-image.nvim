@@ -25,7 +25,9 @@ local function canonicalize(opts)
 end
 
 ---For non-ui modes, derive width/height from PNG IHDR if not provided.
----Mutates opts in-place.
+---Mutates opts in-place. cell_size reports logical pixels on retina
+---terminals (iTerm2/WezTerm); multiply by pixel_scale so opts.width
+---ends up in PHYSICAL cells — matching how the image actually renders.
 ---@param data string raw PNG bytes
 ---@param opts vim.ui.img.Opts
 local function derive_dims(data, opts)
@@ -36,8 +38,9 @@ local function derive_dims(data, opts)
     local cell_size = require("alt-img._core.cell_size")
     cell_size.query()
     local cell_w, cell_h = cell_size.current()
-    opts.width = opts.width or math.ceil(px_w / cell_w)
-    opts.height = opts.height or math.ceil(px_h / cell_h)
+    local pixel_scale = require("alt-img._core.pixel_scale").current() or 1
+    opts.width = opts.width or math.ceil(px_w / (cell_w * pixel_scale))
+    opts.height = opts.height or math.ceil(px_h / (cell_h * pixel_scale))
 end
 
 ---@param row integer
@@ -76,6 +79,87 @@ function M.new(codec)
         return id
     end
 
+    local function on_encode_done(id, _bytes, err)
+        local s = state[id]
+        if not s then
+            return -- placement was deleted while encoding
+        end
+        local cs = s.codec_state
+        if not cs.encode_handle then
+            return -- handle was cancelled or replaced
+        end
+        cs.encode_handle = nil
+        local placeholder = require("alt-img._core.placeholder")
+        if err then
+            cs.encode_errored = true
+            placeholder.set_errored(provider, id)
+            vim.notify_once("alt-img: encode failed: " .. tostring(err), vim.log.levels.ERROR)
+            return
+        end
+        placeholder.hide(provider, id)
+        -- Mark dirty and let the 30ms render timer emit on its next tick.
+        -- Same path ModeChanged uses, which lets nvim drain the carrier
+        -- redraw queued by placeholder.hide before our emit lands.
+        require("alt-img._core.render.registry").force_all_dirty()
+    end
+
+    -- Async crop builds initiated from the render tick. Keyed by crop rect
+    -- per placement; coalesced so repeated tick calls for the same miss
+    -- don't spawn duplicate coroutines.
+    local function crop_key(src)
+        return string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
+    end
+
+    local function schedule_crop_build(id, src)
+        local s = state[id]
+        if not s then
+            return
+        end
+        local cs = s.codec_state
+        cs.pending_crops = cs.pending_crops or {}
+        local key = crop_key(src)
+        if cs.pending_crops[key] then
+            return -- already in flight
+        end
+        local dims_w, dims_h = s.opts.width, s.opts.height
+        local handle = require("alt-img._core.async").run(
+            function()
+                pcall(codec.encode_crop, s, src)
+            end,
+            nil,
+            function(_, _err)
+                local s_now = state[id]
+                if not s_now or not s_now.codec_state.pending_crops then
+                    return
+                end
+                if s_now.opts.width ~= dims_w or s_now.opts.height ~= dims_h then
+                    s_now.codec_state.pending_crops[key] = nil
+                    return -- dims changed; result is stale
+                end
+                s_now.codec_state.pending_crops[key] = nil
+                -- Hide placeholder if no other crops still pending and no full encode in flight.
+                if not next(s_now.codec_state.pending_crops) and not s_now.codec_state.encode_handle then
+                    require("alt-img._core.placeholder").hide(provider, id)
+                end
+                require("alt-img._core.render.registry").force_all_dirty()
+            end
+        )
+        cs.pending_crops[key] = handle
+        local cfg = require("alt-img._core.config").read().placeholder or {}
+        if cfg.enabled ~= false then
+            vim.defer_fn(function()
+                local s_now = state[id]
+                if not s_now or not s_now.codec_state.pending_crops then
+                    return
+                end
+                if s_now.codec_state.pending_crops[key] ~= handle then
+                    return -- completed or cancelled
+                end
+                require("alt-img._core.placeholder").show(provider, id, s_now.opts)
+            end, cfg.delay_ms or 100)
+        end
+    end
+
     ---@param id integer
     ---@param screen_pos? { row: integer, col: integer, src?: alt-img._core.provider.SrcRect }
     ---@return string?
@@ -84,11 +168,20 @@ function M.new(codec)
         if not s then
             return nil
         end
+        if s.codec_state.encode_handle then
+            return nil -- full encode in flight; render tick no-op for this id
+        end
         local src = screen_pos and screen_pos.src
         local payload
         if is_full_rect(src, s.opts) then
             payload = codec.encode_full(s)
         else
+            -- Crop cache miss with no fast path: schedule async build, render
+            -- tick returns nil (blank cells until placeholder + image catch up).
+            if codec.has_cached_crop and not codec.has_cached_crop(s, src) then
+                schedule_crop_build(id, src)
+                return nil
+            end
             payload = codec.encode_crop(s, src)
         end
         if not payload then
@@ -123,28 +216,41 @@ function M.new(codec)
             return on_done()
         end
         local full = is_full_rect(src, opts)
-        -- The async paths exist only when an external accelerator (magick) is
-        -- present. They signal "I did nothing" by passing nil to on_done; in
-        -- that case fall through to the sync build so the cache still warms
-        -- via the pure-Lua encoder rather than leaving on-demand crops to
-        -- block the UI thread later.
+        -- Subprocess paths (encode_full_async / encode_crop_async) already
+        -- yield via vim.system; this fallback is the pure-Lua case. Call
+        -- codec.encode_* directly so build_at's tick-time schedule layer
+        -- doesn't fire a second coroutine for the same work.
+        local function build_via_coroutine()
+            require("alt-img._core.async").run(
+                function()
+                    if full then
+                        pcall(codec.encode_full, s)
+                    else
+                        pcall(codec.encode_crop, s, src)
+                    end
+                end,
+                nil,
+                function()
+                    on_done()
+                end
+            )
+        end
         if full and codec.encode_full_async then
             codec.encode_full_async(s, function(bytes)
                 if not bytes then
-                    pcall(build_at, id, { row = 1, col = 1, src = src })
+                    return build_via_coroutine()
                 end
                 on_done()
             end)
         elseif (not full) and codec.encode_crop_async then
             codec.encode_crop_async(s, src, function(bytes)
                 if not bytes then
-                    pcall(build_at, id, { row = 1, col = 1, src = src })
+                    return build_via_coroutine()
                 end
                 on_done()
             end)
         else
-            pcall(build_at, id, { row = 1, col = 1, src = src })
-            on_done()
+            build_via_coroutine()
         end
     end
 
@@ -201,6 +307,17 @@ function M.new(codec)
             derive_dims(s.data, s.opts)
             local dims_changed = s.opts.width ~= old_w or s.opts.height ~= old_h
             if dims_changed then
+                if s.codec_state.encode_handle then
+                    s.codec_state.encode_handle.cancel()
+                    s.codec_state.encode_handle = nil
+                end
+                if s.codec_state.pending_crops then
+                    for _, h in pairs(s.codec_state.pending_crops) do
+                        h.cancel()
+                    end
+                    s.codec_state.pending_crops = nil
+                end
+                require("alt-img._core.placeholder").hide(provider, data_or_id)
                 codec.invalidate(s)
             end
 
@@ -216,7 +333,34 @@ function M.new(codec)
 
             local render = require("alt-img._core.render")
             render.invalidate(s, data_or_id)
-            render.flush()
+            if codec.has_cached_full and not codec.has_cached_full(s) then
+                local async = require("alt-img._core.async")
+                local cs = s.codec_state
+                cs.encode_handle = async.run(function()
+                    return codec.encode_full(s)
+                end, function(progress)
+                    cs.encode_progress = progress
+                    require("alt-img._core.placeholder").update(provider, data_or_id, progress)
+                end, function(bytes, err)
+                    on_encode_done(data_or_id, bytes, err)
+                end)
+                local cfg = require("alt-img._core.config").read().placeholder or {}
+                if cfg.enabled ~= false then
+                    local handle_at_schedule = cs.encode_handle
+                    vim.defer_fn(function()
+                        local s_now = state[data_or_id]
+                        if not s_now then
+                            return
+                        end
+                        if s_now.codec_state.encode_handle ~= handle_at_schedule then
+                            return
+                        end
+                        require("alt-img._core.placeholder").show(provider, data_or_id, s_now.opts)
+                    end, cfg.delay_ms or 100)
+                end
+            else
+                render.flush()
+            end
 
             if dims_changed then
                 require("alt-img._core.precompute").start(s, data_or_id, s.opts, {
@@ -243,12 +387,53 @@ function M.new(codec)
         end
 
         local render = require("alt-img._core.render")
+        local last_notify_positions = nil
+        local function notify_positions(positions)
+            local registry = require("alt-img._core.render.registry")
+            if not registry.positions_equal(positions, last_notify_positions) then
+                last_notify_positions = positions
+                require("alt-img._core.placeholder").reposition(provider, id, positions)
+            end
+        end
         render.register(s, id, get_pos_for(id), {
             emit_at = emit_at,
             build_at = build_at,
             get_opts = get_opts,
+            notify_positions = notify_positions,
         })
-        render.flush()
+        if codec.has_cached_full and not codec.has_cached_full(s) then
+            local async = require("alt-img._core.async")
+            local cs = s.codec_state
+            cs.encode_handle = async.run(function()
+                -- codec.encode_full populates cs.full_png/full_sixel/etc.
+                -- Inside this coroutine, pure-Lua hot loops yield via
+                -- async.maybe_yield, so the event loop stays responsive.
+                return codec.encode_full(s)
+            end, function(progress)
+                cs.encode_progress = progress
+                require("alt-img._core.placeholder").update(provider, id, progress)
+            end, function(bytes, err)
+                on_encode_done(id, bytes, err)
+            end)
+            local cfg = require("alt-img._core.config").read().placeholder or {}
+            if cfg.enabled ~= false then
+                local handle_at_schedule = cs.encode_handle
+                vim.defer_fn(function()
+                    local s_now = state[id]
+                    if not s_now then
+                        return
+                    end
+                    if s_now.codec_state.encode_handle ~= handle_at_schedule then
+                        return -- handle replaced (re-set with new dims) or completed
+                    end
+                    require("alt-img._core.placeholder").show(provider, id, s_now.opts)
+                end, cfg.delay_ms or 100)
+            end
+            -- Don't flush — no bytes are ready yet. Render tick is a no-op
+            -- for this id until on_encode_done invalidates and flushes.
+        else
+            render.flush()
+        end
 
         require("alt-img._core.precompute").start(s, id, opts_canonical, {
             build_at = build_at,
@@ -293,6 +478,20 @@ function M.new(codec)
                 entries[#entries + 1] = { token = s, k = k }
             end
             for _, entry in ipairs(entries) do
+                local cs = entry.token.codec_state
+                if cs and cs.encode_handle then
+                    cs.encode_handle.cancel()
+                    cs.encode_handle = nil
+                end
+                if cs and cs.pending_crops then
+                    for _, h in pairs(cs.pending_crops) do
+                        h.cancel()
+                    end
+                    cs.pending_crops = nil
+                end
+                require("alt-img._core.placeholder").hide(provider, entry.k)
+            end
+            for _, entry in ipairs(entries) do
                 precompute.cancel(entry.token, entry.k)
                 carrier.unregister(provider, entry.k)
                 render.unregister(entry.token, entry.k)
@@ -306,6 +505,18 @@ function M.new(codec)
         if not state[id] then
             return false
         end
+        local cs = state[id].codec_state
+        if cs and cs.encode_handle then
+            cs.encode_handle.cancel()
+            cs.encode_handle = nil
+        end
+        if cs and cs.pending_crops then
+            for _, h in pairs(cs.pending_crops) do
+                h.cancel()
+            end
+            cs.pending_crops = nil
+        end
+        require("alt-img._core.placeholder").hide(provider, id)
         local token = state[id]
         precompute.cancel(token, id)
         carrier.unregister(provider, id)

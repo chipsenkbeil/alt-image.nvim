@@ -283,6 +283,70 @@ subs.provider = {
     end,
 }
 
+subs.placeholder = {
+    desc = "Force slow path with magick=false, place a large fixture, watch the placeholder animate.",
+    impl = function(args)
+        local mode = args[1] or "editor"
+        if mode ~= "ui" and mode ~= "editor" and mode ~= "buffer" then
+            vim.notify("Usage: :AltImgTest placeholder {ui|editor|buffer}", vim.log.levels.ERROR)
+            return
+        end
+        -- Force pure-Lua path: disable all external accelerators + use a
+        -- short delay_ms so the placeholder is visible even on hosts where
+        -- the pure-Lua chain is "merely slow" rather than 12-second slow.
+        vim.g.alt_img = vim.tbl_extend("force", vim.g.alt_img or {}, {
+            magick = false,
+            img2sixel = false,
+            chafa = false,
+            placeholder = vim.tbl_extend("force", (vim.g.alt_img or {}).placeholder or {}, {
+                enabled = true,
+                delay_ms = 30,
+            }),
+        })
+        -- Pick the larger fixture (org-roam-logo.png) — the 4x4 default
+        -- encodes too fast to ever cross delay_ms.
+        local fixtures_dir = vim.uv.cwd() .. "/test/fixtures"
+        local png_path = fixtures_dir .. "/org-roam-logo.png"
+        if vim.fn.filereadable(png_path) ~= 1 then
+            -- fall back to whatever png exists
+            for _, f in ipairs(vim.fn.glob(fixtures_dir .. "/*.png", false, true)) do
+                png_path = f
+                break
+            end
+        end
+        local f, err = io.open(png_path, "rb")
+        if not f then
+            vim.notify(
+                "AltImgTest placeholder: failed to read " .. png_path .. ": " .. (err or "unknown"),
+                vim.log.levels.ERROR
+            )
+            return
+        end
+        local data = f:read("*a")
+        f:close()
+        local opts = { row = 5, col = 10, width = 30, height = 12 }
+        if mode == "editor" then
+            opts.relative = "editor"
+        elseif mode == "buffer" then
+            opts.buf = 0
+            opts.row, opts.col = 1, 1
+        else
+            opts.relative = "ui"
+        end
+        local id = vim.ui.img.set(data, opts)
+        print(string.format("AltImgTest placeholder: placed %s id=%d  (`:AltImgTest del %d` to remove)", mode, id, id))
+    end,
+    complete = function(arg_lead)
+        local out = {}
+        for _, m in ipairs({ "ui", "editor", "buffer" }) do
+            if m:find("^" .. vim.pesc(arg_lead)) then
+                out[#out + 1] = m
+            end
+        end
+        return out
+    end,
+}
+
 local function sub_names()
     local out = {}
     for k in pairs(subs) do
@@ -314,7 +378,7 @@ vim.api.nvim_create_user_command("AltImgTest", function(opts)
     entry.impl(rest, opts)
 end, {
     nargs = "*",
-    desc = "alt-img.nvim smoke-test scaffolding (path, demo, del, mouse, provider)",
+    desc = "alt-img.nvim smoke-test scaffolding (path, demo, del, mouse, provider, placeholder)",
     complete = function(arg_lead, line, _pos)
         local trimmed = (line or ""):gsub("^%s*AltImgTest!?%s*", "")
         local args = vim.split(trimmed, "%s+", { trimempty = true })
@@ -343,6 +407,7 @@ print("  :AltImgTest path /path/to/img.png   (set the image used by demo / mouse
 print("  :AltImgTest path                    (show current image source)")
 print("  :AltImgTest path default            (reset to test/fixtures/4x4.png)")
 print("  :AltImgTest demo {ui|editor|buffer} (place a static image)")
+print("  :AltImgTest placeholder {ui|editor|buffer} (force slow path; watch placeholder animate)")
 print("  :AltImgTest del {<id>|inf|all}      (remove a placement)")
 print("  :AltImgTest mouse {ui|editor|off}   (image follows mouse)")
 print("  :AltImgTest provider {iterm2|sixel|auto} (force a provider)")

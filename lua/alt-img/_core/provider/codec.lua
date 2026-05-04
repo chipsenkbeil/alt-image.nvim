@@ -19,3 +19,5 @@
 ---@field encode_full_async fun(state: alt-img._core.provider.State, on_done: fun(bytes: string?)) async cache warmer for the full image
 ---@field encode_crop_async fun(state: alt-img._core.provider.State, src: alt-img._core.provider.SrcRect, on_done: fun(bytes: string?)) async cache warmer for a crop
 ---@field invalidate fun(state: alt-img._core.provider.State) reset codec-owned caches when dims change
+---@field has_cached_full fun(state: alt-img._core.provider.State): boolean  true if encode_full(s) would return immediately without any pure-Lua work
+---@field has_cached_crop fun(state: alt-img._core.provider.State, src: alt-img._core.provider.SrcRect): boolean  true if encode_crop(s, src) would return immediately

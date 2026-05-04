@@ -80,8 +80,8 @@ end
 
 ---Schedule background precompute of vertical crop variations. Cancels any
 ---prior precompute for this (token, id) first. No-op when
----`precompute_crops` is false, opts is missing dims, the variation list is
----empty, or callbacks exposes neither `precompute_async` nor `build_at`.
+---`precompute.enabled` is false, opts is missing dims, the variation list
+---is empty, or callbacks exposes neither `precompute_async` nor `build_at`.
 ---Async path runs up to `default_max_concurrent()` magick subprocesses in
 ---parallel (auto-derived from `vim.uv.available_parallelism()`); sync
 ---fallback runs one variant per tick.
@@ -94,7 +94,8 @@ function M.start(token, id, opts, callbacks)
     callbacks = callbacks or {}
 
     local cfg = require("alt-img._core.config").read() or {}
-    if cfg.precompute_crops == false then
+    local pcfg = cfg.precompute or {}
+    if pcfg.enabled == false then
         return
     end
     local has_async = type(callbacks.precompute_async) == "function"
@@ -114,20 +115,20 @@ function M.start(token, id, opts, callbacks)
     end
     active[key(token, id)] = timer
 
-    local interval = cfg.precompute_interval_ms
+    local interval = pcfg.interval_ms
     if type(interval) ~= "number" or interval < 1 then
         interval = 30
     end
-    local start_delay_ms = cfg.precompute_start_delay_ms
+    local start_delay_ms = pcfg.start_delay_ms
     if type(start_delay_ms) ~= "number" or start_delay_ms < 0 then
         start_delay_ms = 500
     end
-    local idle_threshold_ms = cfg.precompute_idle_threshold_ms
+    local idle_threshold_ms = pcfg.idle_threshold_ms
     if type(idle_threshold_ms) ~= "number" or idle_threshold_ms < 0 then
         idle_threshold_ms = 500
     end
     local max_concurrent = default_max_concurrent()
-    local notify = cfg.precompute_notify == true
+    local notify = pcfg.notify == true
 
     local total = #variations
     local started_ns = vim.uv.hrtime()

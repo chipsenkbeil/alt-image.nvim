@@ -62,6 +62,9 @@ function M.resize(rgba, src_w, src_h, dst_w, dst_h)
     local pixel_slots = {}
     for y = 0, dst_h - 1 do
         local src_row_off = math.floor(y * src_h / dst_h) * src_stride
+        if y % 32 == 0 then
+            require("alt-img._core.async").maybe_yield({ phase = "resize", done = y, total = dst_h })
+        end
         for x = 1, dst_w do
             local off = src_row_off + src_x_offsets[x]
             pixel_slots[x] = rgba:sub(off + 1, off + 4)

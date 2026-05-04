@@ -1,7 +1,10 @@
-.PHONY: smoke-test format format-check verify-api lint
+.PHONY: smoke-test smoke-placeholder format format-check verify-api lint
 
 smoke-test:
 	nvim --noplugin -u test/manual_init.lua
+
+smoke-placeholder:
+	nvim --noplugin -u test/manual_init.lua -c "AltImgTest placeholder editor"
 
 format:
 	stylua lua test

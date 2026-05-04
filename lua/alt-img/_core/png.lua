@@ -326,10 +326,12 @@ end
 ---before being called (see `M.decode`).
 ---@param data string raw DEFLATE-compressed bytes (no zlib wrapper)
 ---@return string decompressed bytes
-local function inflate(data)
+local function inflate(data, expected_total)
     local reader = BitReader.new(data)
     local out = {}
     local out_len = 0
+    -- Coarse per-block yield + finer per-4 KiB yield inside the inner loop.
+    local next_yield_at = 4096
 
     local fixed_lit_tbl, fixed_dist_tbl
 
@@ -337,6 +339,8 @@ local function inflate(data)
     while bfinal == 0 do
         bfinal = reader:read(1)
         local btype = reader:read(2)
+
+        require("alt-img._core.async").maybe_yield({ phase = "inflate", done = out_len, total = expected_total })
 
         if btype == 0 then
             reader:align()
@@ -416,6 +420,14 @@ local function inflate(data)
             end
 
             while true do
+                if out_len >= next_yield_at then
+                    require("alt-img._core.async").maybe_yield({
+                        phase = "inflate",
+                        done = out_len,
+                        total = expected_total,
+                    })
+                    next_yield_at = out_len + 4096
+                end
                 local sym = huffman_decode(reader, lit_tbl)
 
                 if sym < 256 then
@@ -545,7 +557,7 @@ function M.decode(data)
     end
     if not decompressed then
         local raw_deflate = compressed:sub(3, -5)
-        decompressed = inflate(raw_deflate)
+        decompressed = inflate(raw_deflate, expected_size)
     end
 
     local stride = width * bpp

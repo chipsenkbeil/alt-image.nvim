@@ -10,10 +10,10 @@ local AUGROUP = vim.api.nvim_create_augroup("alt-img._core.carrier", { clear = t
 ---@field id integer placement id
 ---@field provider table provider that registered this carrier
 ---@field opts table canonical opts at register/update time
----@field kind 'editor'|'buffer' which carrier flavor is in use
+---@field kind 'editor'|'buffer'|'ui_placeholder' which carrier flavor is in use
 ---@field winid integer floating-window id (editor kind)
 ---@field extmark_id integer extmark id reserving virt_lines (buffer kind)
----@field bufnr integer host buffer (both kinds)
+---@field bufnr integer host buffer (all kinds)
 ---@type table<string, alt-img._core.carrier.Carrier>
 local carriers = {}
 
@@ -73,9 +73,32 @@ local function place_buffer_extmark(opts)
     })
 end
 
+---Open a transient float for `relative=ui` placeholder rendering.
+---@param opts table  must include row, col, width, height (cells)
+---@return integer winid, integer bufnr
+local function open_ui_placeholder_float(opts)
+    local buf = vim.api.nvim_create_buf(false, true)
+    local w, h = size_in_cells(opts)
+    local winid = vim.api.nvim_open_win(buf, false, {
+        relative = "editor",
+        row = (opts.row or 1) - 1,
+        col = (opts.col or 1) - 1,
+        width = w,
+        height = h,
+        focusable = false,
+        style = "minimal",
+        zindex = opts.zindex or 50,
+    })
+    return winid, buf
+end
+
 ---@param c alt-img._core.carrier.Carrier
 ---@return alt-img._core.render.Position[]
 local function resolve(c)
+    if c.kind == "ui_placeholder" then
+        -- Transient placeholder carriers aren't part of the render pipeline.
+        return {}
+    end
     local positions = require("alt-img._core.carrier.positions")
     if c.kind == "editor" then
         return positions.resolve_editor(c)
@@ -146,6 +169,77 @@ function M.update(provider, id, opts)
         end
         c.extmark_id = place_buffer_extmark(opts)
     end
+end
+
+---Returns the existing carrier for `(provider, id)`, if any. Used by the
+---placeholder layer to look up the editor-float bufnr or buffer extmark id.
+---@param provider table
+---@param id integer|any
+---@return alt-img._core.carrier.Carrier?
+function M.get(provider, id)
+    return carriers[provider_key(provider, id)]
+end
+
+---Open a transient ui-mode placeholder float for `(provider, id)` and
+---return the buffer where placeholder text should be written. Idempotent —
+---if a ui_placeholder carrier already exists for this id, returns its
+---existing bufnr without re-opening.
+---@param provider table
+---@param id integer|any
+---@param opts table  must include row, col, width, height (cells)
+---@return integer bufnr
+function M.register_ui_placeholder(provider, id, opts)
+    local key = provider_key(provider, id)
+    local existing = carriers[key]
+    if existing and existing.kind == "ui_placeholder" then
+        return existing.bufnr
+    end
+    local winid, bufnr = open_ui_placeholder_float(opts)
+    carriers[key] = {
+        provider = provider,
+        id = id,
+        opts = opts,
+        kind = "ui_placeholder",
+        winid = winid,
+        bufnr = bufnr,
+    }
+    return bufnr
+end
+
+---Reposition/resize the existing ui_placeholder float to match new opts.
+---No-op if no ui_placeholder carrier exists for `(provider, id)`.
+---@param provider table
+---@param id integer|any
+---@param opts table  new row/col/width/height (cells)
+function M.update_ui_placeholder(provider, id, opts)
+    local key = provider_key(provider, id)
+    local c = carriers[key]
+    if not c or c.kind ~= "ui_placeholder" then
+        return
+    end
+    local w, h = size_in_cells(opts)
+    pcall(vim.api.nvim_win_set_config, c.winid, {
+        relative = "editor",
+        row = (opts.row or 1) - 1,
+        col = (opts.col or 1) - 1,
+        width = w,
+        height = h,
+    })
+    c.opts = opts
+end
+
+---Close the ui_placeholder float for `(provider, id)` and remove its
+---carrier record. No-op if the carrier isn't a ui_placeholder.
+---@param provider table
+---@param id integer|any
+function M.unregister_ui_placeholder(provider, id)
+    local key = provider_key(provider, id)
+    local c = carriers[key]
+    if not c or c.kind ~= "ui_placeholder" then
+        return
+    end
+    pcall(vim.api.nvim_win_close, c.winid, true)
+    carriers[key] = nil
 end
 
 ---@param provider table

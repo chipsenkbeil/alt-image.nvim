@@ -9,6 +9,7 @@
 ---@field emit_at fun(id: integer, pos: alt-img._core.render.Position) write the placement at `pos` to the terminal
 ---@field build_at? fun(id: integer, pos: alt-img._core.render.Position): string? build the wire bytes without sending (lets sync/async paths share a build)
 ---@field get_opts? fun(id: integer): table? returns the placement's opts table (used for zindex)
+---@field notify_positions? fun(positions: alt-img._core.render.Position[]) Optional hook called from tick() when positions for this placement are resolved (used by the placeholder layer for ui kind reposition).
 
 ---@class alt-img._core.render.Placement
 ---@field token any opaque identity (any unique value)

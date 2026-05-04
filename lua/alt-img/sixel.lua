@@ -259,6 +259,58 @@ function codec.invalidate(s)
 end
 
 ---@param s alt-img._core.provider.State
+---@return boolean
+function codec.has_cached_full(s)
+    local cs = s.codec_state
+    if cs and cs.full_sixel then
+        return true
+    end
+    if require("alt-img.sixel._chafa").binary() then
+        return true
+    end
+    if require("alt-img.sixel._libsixel").binary() then
+        return true
+    end
+    if require("alt-img._core.magick").binary() then
+        return true
+    end
+    local key = sixel_cache_key_full(s)
+    if not key then
+        return true
+    end
+    local cache = require("alt-img._core.cache")
+    return cache.lookup(key, ".sixel") ~= nil
+end
+
+---@param s alt-img._core.provider.State
+---@param src alt-img._core.provider.SrcRect
+---@return boolean
+function codec.has_cached_crop(s, src)
+    local cs = s.codec_state
+    if cs and cs.crop_cache then
+        local k = string.format("%d,%d,%d,%d", src.x, src.y, src.w, src.h)
+        if cs.crop_cache[k] then
+            return true
+        end
+    end
+    if require("alt-img.sixel._chafa").binary() then
+        return true
+    end
+    if require("alt-img.sixel._libsixel").binary() then
+        return true
+    end
+    if require("alt-img._core.magick").binary() then
+        return true
+    end
+    local key = sixel_cache_key_crop(s, src)
+    if not key then
+        return true
+    end
+    local cache = require("alt-img._core.cache")
+    return cache.lookup(key, ".sixel") ~= nil
+end
+
+---@param s alt-img._core.provider.State
 ---@return string
 function codec.encode_full(s)
     return build_sixel(s)
