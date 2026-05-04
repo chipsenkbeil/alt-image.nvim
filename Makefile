@@ -1,10 +1,22 @@
-.PHONY: smoke-test smoke-placeholder format format-check verify-api lint
+.PHONY: smoke-test smoke-placeholder test test-unit test-e2e format format-check verify-api lint
 
 smoke-test:
 	nvim --noplugin -u test/manual_init.lua
 
 smoke-placeholder:
 	nvim --noplugin -u test/manual_init.lua -c "AltImgTest placeholder editor"
+
+# Run the full test suite. FILTER='lua-pattern' optional.
+test:
+	nvim --headless -l test/runner.lua $(FILTER)
+
+# Unit tests only (in-process, fast).
+test-unit:
+	nvim --headless -l test/runner.lua --unit $(FILTER)
+
+# Harness/end-to-end tests only (spawn child nvim per test).
+test-e2e:
+	nvim --headless -l test/runner.lua --e2e $(FILTER)
 
 format:
 	stylua lua test

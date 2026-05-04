@@ -7,40 +7,68 @@ local PNG_SIGNATURE = "\137PNG\r\n\26\n"
 
 -- Decoder ---------------------------------------------------------------
 
--- Optional libz FFI fast path. "z" is libz on Linux/macOS; "zlib1"/"zlib"/
--- "libz" cover Windows (zlib1.dll) and odd packagings. Falls through to the
--- pure-Lua inflater below when none load.
+-- Optional libz FFI fast path. Candidate dylib names come from
+-- vim.g.alt_img.libz; default covers Linux/macOS ("z") and Windows
+-- ("zlib1"/"zlib"/"libz"). Set `libz = false` to force the pure-Lua
+-- inflater below. Lazy-init on first decode so config set after module
+-- load (e.g. by tests or late-running setup) still takes effect.
 local _zlib_uncompress ---@type fun(data:string, expected:integer):string?
-do
+local _zlib_uncompress_inited = false
+local function libz_candidates()
+    local cfg = require("alt-img._core.config").read()
+    local v = cfg.libz
+    if v == false then
+        return nil
+    end
+    if type(v) == "string" then
+        return { v }
+    end
+    if type(v) == "table" then
+        return v
+    end
+    return { "z", "zlib", "zlib1", "libz" }
+end
+local function init_zlib_uncompress()
+    if _zlib_uncompress_inited then
+        return _zlib_uncompress
+    end
+    _zlib_uncompress_inited = true
+    local candidates = libz_candidates()
+    if not candidates then
+        return nil
+    end
     local ok, ffi = pcall(require, "ffi")
-    if ok then
-        local zlib
-        for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
-            local zok, lib = pcall(ffi.load, name)
-            if zok then
-                zlib = lib
-                break
-            end
+    if not ok then
+        return nil
+    end
+    local zlib
+    for _, name in ipairs(candidates) do
+        local zok, lib = pcall(ffi.load, name)
+        if zok then
+            zlib = lib
+            break
         end
-        if zlib then
-            pcall(
-                ffi.cdef,
-                [[
+    end
+    if not zlib then
+        return nil
+    end
+    pcall(
+        ffi.cdef,
+        [[
         int uncompress(uint8_t *dest, unsigned long *destLen,
                        const uint8_t *source, unsigned long sourceLen);
       ]]
-            )
-            _zlib_uncompress = function(data, expected_size)
-                local dest = ffi.new("uint8_t[?]", expected_size)
-                local destLen = ffi.new("unsigned long[1]", expected_size)
-                local ret = zlib.uncompress(dest, destLen, data, #data)
-                if ret ~= 0 then
-                    return nil
-                end
-                return ffi.string(dest, destLen[0])
-            end
+    )
+    _zlib_uncompress = function(data, expected_size)
+        local dest = ffi.new("uint8_t[?]", expected_size)
+        local destLen = ffi.new("unsigned long[1]", expected_size)
+        local ret = zlib.uncompress(dest, destLen, data, #data)
+        if ret ~= 0 then
+            return nil
         end
+        return ffi.string(dest, destLen[0])
     end
+    return _zlib_uncompress
 end
 
 -- DEFLATE fixed Huffman code lengths (RFC 1951 section 3.2.6)
@@ -552,8 +580,9 @@ function M.decode(data)
     local compressed = table.concat(idat_chunks)
     local expected_size = height * (1 + width * bpp)
     local decompressed
-    if _zlib_uncompress then
-        decompressed = _zlib_uncompress(compressed, expected_size)
+    local zuncompress = init_zlib_uncompress()
+    if zuncompress then
+        decompressed = zuncompress(compressed, expected_size)
     end
     if not decompressed then
         local raw_deflate = compressed:sub(3, -5)
@@ -746,47 +775,59 @@ local function zlib_store(raw)
     return table.concat(parts)
 end
 
--- Optional libz FFI compress fast path. Any failure (no FFI, no libz, ABI
--- mismatch, runtime error) leaves libz_compress nil and the encoder falls
--- back to `zlib_store` (uncompressed but valid PNG).
+-- Optional libz FFI compress fast path. Lazy-init mirrors the decode-side
+-- binding above so vim.g.alt_img.libz set after module load takes effect.
 ---@type (fun(data: string, level?: integer): string?)?
 local libz_compress
-
-local _libz_ok = pcall(function()
-    local ffi = require("ffi")
-    ffi.cdef([[
-    typedef unsigned long alt_img_uLongf;
-    int compress2(uint8_t *dest, alt_img_uLongf *destLen,
-                  const uint8_t *source, alt_img_uLongf sourceLen, int level);
-  ]])
-    local libz
-    for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
-        local lok, lib = pcall(ffi.load, name)
-        if lok then
-            libz = lib
-            break
+local _libz_compress_inited = false
+local function init_libz_compress()
+    if _libz_compress_inited then
+        return libz_compress
+    end
+    _libz_compress_inited = true
+    local candidates = libz_candidates()
+    if not candidates then
+        return nil
+    end
+    local ok = pcall(function()
+        local ffi = require("ffi")
+        pcall(
+            ffi.cdef,
+            [[
+        typedef unsigned long alt_img_uLongf;
+        int compress2(uint8_t *dest, alt_img_uLongf *destLen,
+                      const uint8_t *source, alt_img_uLongf sourceLen, int level);
+      ]]
+        )
+        local libz
+        for _, name in ipairs(candidates) do
+            local lok, lib = pcall(ffi.load, name)
+            if lok then
+                libz = lib
+                break
+            end
         end
-    end
-    if not libz then
-        error("libz not loadable")
-    end
-
-    libz_compress = function(data, level)
-        local src_len = #data
-        local dst_capacity = src_len + math.ceil(src_len / 1000) + 32
-        local dst = ffi.new("uint8_t[?]", dst_capacity)
-        local dst_len = ffi.new("alt_img_uLongf[1]", dst_capacity)
-        local src = ffi.cast("const uint8_t*", data)
-        local rc = libz.compress2(dst, dst_len, src, src_len, level or 6)
-        if rc ~= 0 then
-            return nil
+        if not libz then
+            error("libz not loadable")
         end
-        return ffi.string(dst, dst_len[0])
-    end
-end)
 
-if not _libz_ok then
-    libz_compress = nil
+        libz_compress = function(data, level)
+            local src_len = #data
+            local dst_capacity = src_len + math.ceil(src_len / 1000) + 32
+            local dst = ffi.new("uint8_t[?]", dst_capacity)
+            local dst_len = ffi.new("alt_img_uLongf[1]", dst_capacity)
+            local src = ffi.cast("const uint8_t*", data)
+            local rc = libz.compress2(dst, dst_len, src, src_len, level or 6)
+            if rc ~= 0 then
+                return nil
+            end
+            return ffi.string(dst, dst_len[0])
+        end
+    end)
+    if not ok then
+        libz_compress = nil
+    end
+    return libz_compress
 end
 
 ---Compress `raw` with libz DEFLATE when available, otherwise fall back to
@@ -794,8 +835,9 @@ end
 ---@param raw string uncompressed bytes
 ---@return string zlib-compressed bytes
 local function zlib_compress(raw)
-    if libz_compress then
-        local out = libz_compress(raw)
+    local lcompress = init_libz_compress()
+    if lcompress then
+        local out = lcompress(raw)
         if out and #out > 0 then
             return out
         end
@@ -807,7 +849,7 @@ end
 ---stored-block fallback. Surfaced via :checkhealth.
 ---@return boolean
 function M.has_libz()
-    return libz_compress ~= nil
+    return init_libz_compress() ~= nil
 end
 
 ---Encode an 8-bit RGBA pixel buffer as a PNG byte string.

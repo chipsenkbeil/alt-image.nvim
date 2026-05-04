@@ -65,6 +65,11 @@ vim.g.alt_img = {
   -- libsixel CLI for fast sixel encoding. Same shape as `magick`.
   img2sixel = { 'img2sixel' },          -- string | string[] | false
 
+  -- libz dylib(s) to load via LuaJIT FFI for real DEFLATE PNG. Same shape
+  -- as `magick` — first loadable name wins; `false` forces the pure-Lua
+  -- inflater (slower but always available, useful for testing).
+  libz = { 'z', 'zlib', 'zlib1', 'libz' },  -- string | string[] | false
+
   -- chafa CLI for transparent-PNG sixel encoding. Only relevant for the
   -- sixel provider; it's preferred when a PNG has alpha because chafa is
   -- the only external encoder that preserves transparency. Same shape as

@@ -24,6 +24,7 @@
 ---@field magick? string|string[]|false  magick CLI candidate(s); false disables
 ---@field img2sixel? string|string[]|false  img2sixel CLI candidate(s); false disables
 ---@field chafa? string|string[]|false  chafa CLI candidate(s); preferred for transparent PNGs
+---@field libz? string|string[]|false  libz dylib name(s) to ffi.load; false forces pure-Lua INFLATE
 ---@field sixel_pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
 ---@field precompute? alt-img._core.PrecomputeConfig  background crop-variant warmer
 ---@field cache? alt-img._core.CacheConfig  on-disk encode cache
@@ -38,6 +39,7 @@ local DEFAULTS = {
     autodetect = { "iterm2", "sixel" },
     chafa = { "chafa" },
     img2sixel = { "img2sixel" },
+    libz = { "z", "zlib", "zlib1", "libz" },
     magick = { "magick", "convert" },
     placeholder = {
         enabled = true,
