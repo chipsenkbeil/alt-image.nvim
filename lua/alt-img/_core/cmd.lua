@@ -102,6 +102,14 @@ function M.info_lines()
     lines[#lines + 1] = "Cell pixel size (CSI 16t):"
     lines[#lines + 1] = string.format("  width  = %d px", cw)
     lines[#lines + 1] = string.format("  height = %d px", ch)
+    local cs_ms, cs_answered = cell_size.last_probe()
+    if cs_ms then
+        lines[#lines + 1] = string.format(
+            "  probe  = %.1f ms (%s)",
+            cs_ms,
+            cs_answered and "terminal answered" or "timed out → using platform default"
+        )
+    end
 
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Active vim.ui.img provider:"
@@ -140,6 +148,26 @@ function M.info_lines()
         string.format("  scale via CSI 14t/18t/16t       = %s", geom > 0 and (geom .. "×") or "no signal")
     lines[#lines + 1] = string.format("  scale chosen by auto-detect     = %d×", final_auto)
     lines[#lines + 1] = string.format("  scale actually used (effective) = %d×", effective)
+    local pp = pixel_scale.last_probe()
+    if pp.wt_short_circuit then
+        lines[#lines + 1] = "  probe                           = 0.0 ms (WT_SESSION short-circuit, no CSI 14t/18t)"
+    elseif pp.osc1337_ms or pp.geometry_ms then
+        lines[#lines + 1] = string.format(
+            "  probe                           = %.1f ms OSC 1337 + %.1f ms CSI 14t/18t",
+            pp.osc1337_ms or 0,
+            pp.geometry_ms or 0
+        )
+    end
+
+    -- Disk encode cache.
+    local cache = require("alt-img._core.cache")
+    local cache_stats = cache.stats()
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Disk encode cache:"
+    lines[#lines + 1] = string.format("  enabled = %s", tostring(cache.is_enabled()))
+    lines[#lines + 1] = string.format("  dir     = %s", cache_stats.dir)
+    lines[#lines + 1] = string.format("  entries = %d", cache_stats.entries)
+    lines[#lines + 1] = string.format("  bytes   = %d", cache_stats.bytes)
 
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Active placements:"

@@ -8,6 +8,12 @@ local queried = false
 local from_osc1337 = 0
 ---@type integer
 local from_geometry = 0
+---@type number? wall-time of the OSC 1337 probe in ms; nil = not run yet
+local osc1337_probe_ms = nil
+---@type number? wall-time of the CSI 14t/18t probe in ms; nil = not run yet
+local geometry_probe_ms = nil
+---@type boolean whether M.current() chose the WT short-circuit instead of probing
+local wt_short_circuit = false
 
 -- iTerm2 OSC 1337 ReportCellSize reply: `<height>;<width>;<scale>` (points,
 -- points, screen scale factor). The scale field is what we want.
@@ -129,10 +135,15 @@ function M.current()
             from_osc1337 = 0
             from_geometry = 0
             scale = 1
+            wt_short_circuit = true
             return scale
         end
+        local t = vim.uv.hrtime()
         from_osc1337 = query_osc1337()
+        osc1337_probe_ms = (vim.uv.hrtime() - t) / 1e6
+        t = vim.uv.hrtime()
         from_geometry = query_geometry()
+        geometry_probe_ms = (vim.uv.hrtime() - t) / 1e6
         scale = math.max(from_osc1337, from_geometry, 1)
     end
     return scale
@@ -147,11 +158,24 @@ function M.sources()
     return from_osc1337, from_geometry
 end
 
+---Diagnostic: probe-time breakdown for the last `M.current()` resolution.
+---@return { osc1337_ms: number?, geometry_ms: number?, wt_short_circuit: boolean }
+function M.last_probe()
+    return {
+        osc1337_ms = osc1337_probe_ms,
+        geometry_ms = geometry_probe_ms,
+        wt_short_circuit = wt_short_circuit,
+    }
+end
+
 local AUGROUP = vim.api.nvim_create_augroup("alt-img.pixel_scale", { clear = true })
 vim.api.nvim_create_autocmd({ "VimResized", "UIEnter" }, {
     group = AUGROUP,
     callback = function()
         queried = false
+        osc1337_probe_ms = nil
+        geometry_probe_ms = nil
+        wt_short_circuit = false
     end,
 })
 
