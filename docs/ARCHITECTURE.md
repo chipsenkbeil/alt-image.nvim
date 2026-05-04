@@ -446,7 +446,11 @@ width/height in cells and does its own DPI scaling internally.
 
 ---
 
-## 9. External tool detection & dispatch
+## 9. External tool acceleration
+
+alt-img picks the cheapest available path per stage. External-tool
+detection runs once per session and is cached. Disable any tool with
+`vim.g.alt_img.<tool> = false`; everything has a pure-Lua fallback.
 
 ```
                      vim.g.alt_img
@@ -469,8 +473,37 @@ magick and img2sixel are spawned via `_core/subprocess.run` /
 debug surface and pcall protection. A missing tool or non-zero exit
 returns nil and the caller falls through to the next path.
 
-Dispatch order per pipeline stage is documented in
-[`README.md` § Acceleration](../README.md#acceleration).
+### Sixel provider (`require('alt-img.sixel')`)
+
+| Stage | Preferred | Fallback 1 | Fallback 2 | Last resort | Notes |
+|---|---|---|---|---|---|
+| Full image (decode + resize + sixel-encode) | `magick` one-shot (`-sample WxH! sixel:-`) | (no libsixel one-shot for full image; falls through to pure-Lua chain) | — | pure-Lua decode → resize → quantize → encode | One subprocess, no PNG hop. Biggest single win on hosts without libz. |
+| Cropped sub-rect | `magick` one-shot (`-sample WxH! -crop WxH+X+Y sixel:-`) | pure-Lua resize → crop → encode | — | — | Pure-Lua crop is just `string.sub` per row; the cost is the encode. |
+| RGBA → sixel (no libz) | `magick` raw-RGBA (`-size WxH -depth 8 RGBA:-`) | pure-Lua quantize + encode | — | — | Skips the expensive PNG-encode hop on no-libz hosts. `img2sixel` has no raw-input mode, so it isn't tried in this branch. |
+| RGBA → PNG → sixel (with libz) | `img2sixel` | `magick` PNG path | pure-Lua | — | `img2sixel` is preferred when both are present and libz is available. |
+| PNG decode | libz `uncompress` (FFI) | pure-Lua INFLATE | — | — | Pure-Lua INFLATE is the slowest single component when libz is missing. |
+| PNG encode | libz `compress2` (FFI) | uncompressed stored blocks | — | — | Stored-block output is ~4× the raw RGBA size; the no-libz raw-RGBA branch above exists to avoid this. |
+| RGBA resize / crop | pure Lua (`string.sub` + `table.concat`) | — | — | — | Always fast enough not to need an external tool. |
+
+### iTerm2 provider (`require('alt-img.iterm2')`)
+
+| Stage | Preferred | Fallback | Notes |
+|---|---|---|---|
+| Full image (decode + resize + PNG re-encode) | `magick` one-shot (`-sample WxH! png:-`) | pure-Lua decode → resize → encode | iTerm2 receives image-pixels == cell-pixels so its own scaler is a no-op (sharp output). |
+| Cropped sub-rect | `magick` one-shot (`-crop WxH+X+Y png:-`) on the cached resized PNG | pure-Lua crop → encode | Crop runs against the resized PNG, not the original — keeps output identical to the pure-Lua path. |
+| Base64 of payload | `vim.base64.encode` (built-in) | — | Result cached alongside the PNG. |
+
+### What is *not* accelerated (deliberate)
+
+- **Pure-Lua sixel string manipulation** (cropping/resizing an existing
+  DCS string in place). Cropping the cached resized RGBA buffer and
+  re-encoding is strictly faster than parsing 6-row sixel bands back to
+  pixels. When `magick` is present it does resize + crop + encode in one
+  subprocess.
+- **Cross-placement cache sharing.** Two `set()` calls for the same PNG
+  at the same size build separate per-placement caches.
+- **PNG-on-disk mtime invalidation.** `set()` takes raw bytes, not a
+  path; callers re-`set()` after edits.
 
 ---
 
