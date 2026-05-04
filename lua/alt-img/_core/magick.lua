@@ -120,6 +120,48 @@ function M.encode_png_resized(png_bytes, w_px, h_px)
     return run({ bin, "-", "-sample", geom, "png:-" }, png_bytes)
 end
 
+---Decode + resize-to-target + crop-of-target + PNG re-encode in one
+---subprocess. Useful as a feeder for chafa, which can decode + sixel-encode
+---but cannot pixel-resize or crop on its own. Crop coords are in *resized*
+---pixel space, matching the carrier math elsewhere in the codec.
+---@param png_bytes string
+---@param full_w_px integer
+---@param full_h_px integer
+---@param x_px integer
+---@param y_px integer
+---@param w_px integer
+---@param h_px integer
+---@return string?
+function M.crop_resized_to_png(png_bytes, full_w_px, full_h_px, x_px, y_px, w_px, h_px)
+    local bin = M.binary()
+    if not bin then
+        return nil
+    end
+    local sample = string.format("%dx%d!", full_w_px, full_h_px)
+    local crop = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
+    return run({ bin, "-", "-sample", sample, "-crop", crop, "png:-" }, png_bytes)
+end
+
+---Async: decode + resize + crop + PNG re-encode. Invokes
+---`on_done(png_or_nil)` from the main loop when the subprocess exits.
+---@param png_bytes string
+---@param full_w_px integer
+---@param full_h_px integer
+---@param x_px integer
+---@param y_px integer
+---@param w_px integer
+---@param h_px integer
+---@param on_done fun(png: string?)
+function M.crop_resized_to_png_async(png_bytes, full_w_px, full_h_px, x_px, y_px, w_px, h_px, on_done)
+    local bin = M.binary()
+    if not bin then
+        return on_done(nil)
+    end
+    local sample = string.format("%dx%d!", full_w_px, full_h_px)
+    local crop = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
+    run_async({ bin, "-", "-sample", sample, "-crop", crop, "png:-" }, png_bytes, on_done)
+end
+
 ---Decode + resize-to-target + crop-of-target + sixel-encode in one magick
 ---subprocess. The crop coordinates are in *target* pixel space (after the
 ---resize), matching the providers' carrier math which works in cell-pixel

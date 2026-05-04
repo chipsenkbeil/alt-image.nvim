@@ -94,6 +94,76 @@ local function ensure_resized(s)
     return rgba, w, h
 end
 
+---Try the priority chain (chafa→img2sixel→magick) on the *original* PNG
+---with explicit pixel-target dims, so each tool does as much decode +
+---resize + sixel-encode work as possible per subprocess. Returns nil if
+---no tool produced output — the caller falls back to the pure-Lua RGBA
+---path (which decodes/resizes in Lua then re-runs the dispatcher).
+---@param s alt-img._core.provider.State
+---@param target_w integer
+---@param target_h integer
+---@return string?
+local function try_full_via_tools(s, target_w, target_h)
+    local chafa = require("alt-img.sixel._chafa")
+    local libsixel = require("alt-img.sixel._libsixel")
+    local magick = require("alt-img._core.magick")
+    if chafa.binary() then
+        local out = chafa.encode_sixel_resized(s.data, target_w, target_h)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    if libsixel.binary() then
+        local out = libsixel.encode_sixel_resized(s.data, target_w, target_h)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    if magick.binary() then
+        local out = magick.encode_sixel_from_png_resized(s.data, target_w, target_h)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    return nil
+end
+
+---Same idea as `try_full_via_tools` but for a cropped slice — chafa relies
+---on magick for the decode+resize+crop hop (it can't crop), img2sixel and
+---magick each do everything in one subprocess.
+---@param s alt-img._core.provider.State
+---@param full_w integer
+---@param full_h integer
+---@param x_px integer
+---@param y_px integer
+---@param w_px integer
+---@param h_px integer
+---@return string?
+local function try_crop_via_tools(s, full_w, full_h, x_px, y_px, w_px, h_px)
+    local chafa = require("alt-img.sixel._chafa")
+    local libsixel = require("alt-img.sixel._libsixel")
+    local magick = require("alt-img._core.magick")
+    if chafa.binary() then
+        local out = chafa.crop_resized_to_sixel(s.data, full_w, full_h, x_px, y_px, w_px, h_px)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    if libsixel.binary() then
+        local out = libsixel.crop_resized_to_sixel(s.data, full_w, full_h, x_px, y_px, w_px, h_px)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    if magick.binary() then
+        local out = magick.crop_resized_to_sixel(s.data, full_w, full_h, x_px, y_px, w_px, h_px)
+        if out and #out > 0 then
+            return out
+        end
+    end
+    return nil
+end
+
 ---@param s alt-img._core.provider.State
 ---@return string sixel
 local function build_sixel(s)
@@ -110,7 +180,24 @@ local function build_sixel(s)
             return cached
         end
     end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
     local scale = sixel_scale()
+    if s.opts.width and s.opts.height then
+        local target_w = s.opts.width * cw * scale
+        local target_h = s.opts.height * ch * scale
+        local tool_out = try_full_via_tools(s, target_w, target_h)
+        if tool_out then
+            cs.full_sixel = tool_out
+            if key then
+                cache.store(key, ".sixel", tool_out)
+            end
+            return tool_out
+        end
+    end
+    -- No tool produced output (or no target dims known): fall back to the
+    -- pure-Lua decode+resize+RGBA-dispatch tail.
     local rgba, w, h = ensure_resized(s)
     if scale > 1 then
         rgba, w, h = require("alt-img._core.image").resize(rgba, w, h, w * scale, h * scale)
@@ -140,6 +227,17 @@ local function build_sixel_cropped(s, src)
     local scale = sixel_scale()
     local x_px, y_px = src.x * cw * scale, src.y * ch * scale
     local w_px, h_px = src.w * cw * scale, src.h * ch * scale
+    if s.opts.width and s.opts.height then
+        local full_w = s.opts.width * cw * scale
+        local full_h = s.opts.height * ch * scale
+        local tool_out = try_crop_via_tools(s, full_w, full_h, x_px, y_px, w_px, h_px)
+        if tool_out then
+            if key then
+                cache.store(key, ".sixel", tool_out)
+            end
+            return tool_out
+        end
+    end
 
     local rgba, w, h = ensure_resized(s)
     if scale > 1 then
@@ -188,19 +286,6 @@ function codec.encode_crop(s, src)
     return cached
 end
 
----Pre-resize the placement's RGBA to its cell-pixel grid (scale-aware) and
----return PNG bytes ready for chafa/img2sixel/magick. nil on encode failure.
----@param s alt-img._core.provider.State
----@return string? png_bytes
-local function build_full_png(s)
-    local rgba, w, h = ensure_resized(s)
-    local scale = sixel_scale()
-    if scale > 1 then
-        rgba, w, h = require("alt-img._core.image").resize(rgba, w, h, w * scale, h * scale)
-    end
-    return require("alt-img._core.png").encode(rgba, w, h)
-end
-
 ---@param s alt-img._core.provider.State
 ---@param on_done fun(bytes: string?)
 function codec.encode_full_async(s, on_done)
@@ -224,6 +309,13 @@ function codec.encode_full_async(s, on_done)
     local libsixel = require("alt-img.sixel._libsixel")
     local magick = require("alt-img._core.magick")
 
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local scale = sixel_scale()
+    local target_w = s.opts.width * cw * scale
+    local target_h = s.opts.height * ch * scale
+
     local function deliver(out)
         if out and #out > 0 then
             cs.full_sixel = out
@@ -237,32 +329,19 @@ function codec.encode_full_async(s, on_done)
 
     -- Priority: chafa → img2sixel → magick. First-available wins; on
     -- subprocess failure on_done(nil) lets the provider's sync fallback
-    -- (build_at) try the next tool via encode_sixel_dispatch.
+    -- (build_at) try the next tool via encode_sixel_dispatch (which
+    -- exercises the pure-Lua tail). Each tool gets the original PNG bytes
+    -- and the explicit pixel target so it does decode + resize + sixel-
+    -- encode in one subprocess (chafa needs magick as a feeder for the
+    -- pixel-resize step, since chafa alone cannot pixel-resize).
     if chafa.binary() then
-        local png_bytes = build_full_png(s)
-        if not png_bytes then
-            return on_done(nil)
-        end
-        return chafa.encode_sixel_async(png_bytes, deliver)
+        return chafa.encode_sixel_resized_async(s.data, target_w, target_h, deliver)
     end
     if libsixel.binary() then
-        local png_bytes = build_full_png(s)
-        if not png_bytes then
-            return on_done(nil)
-        end
-        return libsixel.encode_sixel_async(png_bytes, deliver)
+        return libsixel.encode_sixel_resized_async(s.data, target_w, target_h, deliver)
     end
     if magick.binary() then
-        local cell_size = require("alt-img._core.cell_size")
-        cell_size.query()
-        local cw, ch = cell_size.current()
-        local scale = sixel_scale()
-        return magick.encode_sixel_from_png_resized_async(
-            s.data,
-            s.opts.width * cw * scale,
-            s.opts.height * ch * scale,
-            deliver
-        )
+        return magick.encode_sixel_from_png_resized_async(s.data, target_w, target_h, deliver)
     end
     on_done(nil)
 end
@@ -270,27 +349,6 @@ end
 ---@param s alt-img._core.provider.State
 ---@param src alt-img._core.provider.SrcRect
 ---@param on_done fun(bytes: string?)
----Pre-resize and crop the placement's RGBA, then PNG-encode the cropped
----rectangle ready for chafa/img2sixel. nil on encode failure.
----@param s alt-img._core.provider.State
----@param src alt-img._core.provider.SrcRect
----@return string? png_bytes
-local function build_crop_png(s, src)
-    local cell_size = require("alt-img._core.cell_size")
-    cell_size.query()
-    local cw, ch = cell_size.current()
-    local scale = sixel_scale()
-    local x_px, y_px = src.x * cw * scale, src.y * ch * scale
-    local w_px, h_px = src.w * cw * scale, src.h * ch * scale
-    local rgba, w, h = ensure_resized(s)
-    if scale > 1 then
-        rgba, w, h = require("alt-img._core.image").resize(rgba, w, h, w * scale, h * scale)
-    end
-    local cropped, cw_px, ch_px =
-        require("alt-img._core.image").crop_rgba(rgba, w, h, x_px, y_px, w_px, h_px)
-    return require("alt-img._core.png").encode(cropped, cw_px, ch_px)
-end
-
 function codec.encode_crop_async(s, src, on_done)
     local cs = s.codec_state
     ensure_caches(cs)
@@ -337,33 +395,30 @@ function codec.encode_crop_async(s, src, on_done)
         on_done(nil)
     end
 
-    -- Priority: chafa → img2sixel → magick. Same fallback semantics as
-    -- encode_full_async: on_done(nil) routes the provider to sync build_at,
-    -- which uses encode_sixel_dispatch (which chains the same tools plus
-    -- the pure-Lua tail).
+    if not (s.opts.width and s.opts.height) then
+        return on_done(nil)
+    end
+    local cell_size = require("alt-img._core.cell_size")
+    cell_size.query()
+    local cw, ch = cell_size.current()
+    local scale = sixel_scale()
+    local x_px, y_px = src.x * cw * scale, src.y * ch * scale
+    local w_px, h_px = src.w * cw * scale, src.h * ch * scale
+    local full_w = s.opts.width * cw * scale
+    local full_h = s.opts.height * ch * scale
+
+    -- Priority: chafa → img2sixel → magick. Each tool does decode +
+    -- pixel-resize + pixel-crop + sixel-encode in one subprocess (chafa
+    -- requires magick as a feeder for the resize+crop step). On
+    -- subprocess failure the provider falls back to sync build_at which
+    -- runs the pure-Lua tail.
     if chafa.binary() then
-        local png_bytes = build_crop_png(s, src)
-        if not png_bytes then
-            return on_done(nil)
-        end
-        return chafa.encode_sixel_async(png_bytes, deliver)
+        return chafa.crop_resized_to_sixel_async(s.data, full_w, full_h, x_px, y_px, w_px, h_px, deliver)
     end
     if libsixel.binary() then
-        local png_bytes = build_crop_png(s, src)
-        if not png_bytes then
-            return on_done(nil)
-        end
-        return libsixel.encode_sixel_async(png_bytes, deliver)
+        return libsixel.crop_resized_to_sixel_async(s.data, full_w, full_h, x_px, y_px, w_px, h_px, deliver)
     end
     if magick.binary() then
-        local cell_size = require("alt-img._core.cell_size")
-        cell_size.query()
-        local cw, ch = cell_size.current()
-        local scale = sixel_scale()
-        local x_px, y_px = src.x * cw * scale, src.y * ch * scale
-        local w_px, h_px = src.w * cw * scale, src.h * ch * scale
-        local full_w = s.opts.width * cw * scale
-        local full_h = s.opts.height * ch * scale
         return magick.crop_resized_to_sixel_async(s.data, full_w, full_h, x_px, y_px, w_px, h_px, deliver)
     end
     on_done(nil)
