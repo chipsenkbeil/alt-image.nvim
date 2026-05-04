@@ -1,4 +1,5 @@
 ---@class alt-img._core.Config
+---@field autodetect? string[]  provider names autodetect probes, in order; first supported wins
 ---@field magick? string|string[]|false  magick CLI candidate(s); false disables
 ---@field img2sixel? string|string[]|false  img2sixel CLI candidate(s); false disables
 ---@field crop_cache_size? integer  per-placement LRU max for cached crop encodings
@@ -18,6 +19,7 @@ local M = {}
 -- "auto-detect via pixel_scale.current()"; any integer wins over auto.
 ---@type alt-img._core.Config
 local DEFAULTS = {
+    autodetect = { "iterm2", "sixel" },
     magick = { "magick", "convert" },
     img2sixel = { "img2sixel" },
     crop_cache_size = 256,

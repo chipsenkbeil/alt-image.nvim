@@ -504,7 +504,9 @@ matches()
 ```
 
 The match cache is a file-local in `_core/autodetect.lua` and persists
-for the session.
+for the session. The candidate list and probe order come from
+`vim.g.alt_img.autodetect` (default `{ "iterm2", "sixel" }`); pin a
+protocol by setting it to a single-entry list.
 
 ---
 

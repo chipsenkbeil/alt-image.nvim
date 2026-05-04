@@ -2,8 +2,6 @@
 
 local M = {}
 
-local CANDIDATES = { "iterm2", "sixel" }
-
 ---@type alt-img._core.autodetect.Match[]?
 local cache = nil
 
@@ -15,6 +13,7 @@ local cache = nil
 
 ---Probes every candidate provider in priority order and returns the
 ---results. Caches on first call; subsequent calls return the same list.
+---Order/contents come from `vim.g.alt_img.autodetect`.
 ---@param opts? { timeout?: integer }
 ---@return alt-img._core.autodetect.Match[]
 function M.matches(opts)
@@ -22,7 +21,8 @@ function M.matches(opts)
         return cache
     end
     cache = {}
-    for _, name in ipairs(CANDIDATES) do
+    local cfg = require("alt-img._core.config").read()
+    for _, name in ipairs(cfg.autodetect) do
         local provider = require("alt-img." .. name)
         local ok, msg = provider._supported(opts)
         table.insert(cache, { name = name, provider = provider, ok = ok, msg = msg })

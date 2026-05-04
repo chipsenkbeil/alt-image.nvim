@@ -48,11 +48,15 @@ fallback when it isn't).
 ## Configuration
 
 No `setup()` function. Protocol choice is expressed by which module you
-require (see snippet above). The only configurable surface is the optional
-external-tool acceleration:
+require (see snippet above). Two configurable surfaces:
 
 ```lua
 vim.g.alt_img = {
+  -- Providers `require('alt-img')` probes during autodetection, in order.
+  -- First one whose `_supported()` returns true wins. Set to a single-entry
+  -- list to pin a protocol; omit to use the default below.
+  autodetect = { 'iterm2', 'sixel' },
+
   -- ImageMagick CLI for fast crop + (re)encode. Accepts a single binary
   -- name, an ordered list of candidates (first executable wins), or `false`
   -- to disable the path entirely. Falls through to pure-Lua otherwise.
