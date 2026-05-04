@@ -85,7 +85,7 @@ even though those terminals also support sixel.
                      ▼
             ensure_full_png(state)
             ┌──────────────────────────────────────────┐
-            │ if cache hit (s.full_png): return        │
+            │ if cache hit (cs.full_png): return       │
             │                                          │
             │ if magick on PATH AND opts.width/height: │
             │     ┌──────────────────────────────────┐ │
@@ -100,21 +100,21 @@ even though those terminals also support sixel.
             │   ensure_resized(state)                  │
             │     ┌────────────────────────────────┐   │
             │     │ png.decode → image.resize      │   │
-            │     │   (FFI memcpy; nearest-neighbor)│  │
+            │     │   (pure-Lua nearest-neighbor)  │   │
             │     └────────────────────────────────┘   │
-            │   png.encode  (libz or stored blocks)    │
+            │   png.encode  (libz FFI or stored blocks)│
             │   base64 (built-in vim.base64.encode)    │
             └──────────────────────────────────────────┘
                      │
                      ▼
-               s.full_png + s.full_png_b64
+               cs.full_png + cs.full_png_b64
                      │
                      ▼
-            _emit_at builds OSC 1337 payload + cursor
-            save/hide/restore around the move
+            engine wraps OSC 1337 payload with cursor
+            save/hide/move/restore framing
                      │
                      ▼
-             util.term_send (= nvim_ui_send)
+             term_io.send (= nvim_ui_send)
                      │
                      ▼
                  iTerm2 / WezTerm
@@ -158,7 +158,7 @@ Given:
 
 - `opts.width`, `opts.height` from `set()` (in cells; both required for
   the magick fast path)
-- `cell_w_px`, `cell_h_px` from `util.cell_pixel_size()` (CSI 16t reply)
+- `cell_w_px`, `cell_h_px` from `cell_size.current()` (CSI 16t reply)
 
 The encoder targets:
 
@@ -167,9 +167,10 @@ target_w_px = opts.width  × cell_w_px
 target_h_px = opts.height × cell_h_px
 ```
 
-`derive_dims` (in `iterm2.lua` and `sixel.lua`) fills `opts.width` /
-`opts.height` from the source PNG's IHDR when the user didn't pass
-them, dividing by cell-pixel size to land on a whole cell count.
+`derive_dims` in the provider engine (`_core/provider/init.lua`) fills
+`opts.width` / `opts.height` from the source PNG's IHDR
+(`png_header.dimensions`) when the user didn't pass them, dividing by
+cell-pixel size to land on a whole cell count.
 
 Note: iTerm2's OSC 1337 path does **not** apply
 `vim.g.alt_img.sixel_pixel_scale`. iTerm2 already accounts for retina
@@ -201,8 +202,8 @@ image.crop_rgba + png.encode      (pure Lua)
 { png = bytes, b64 = base64 }
        │
        ▼
-LRU cache keyed by "x,y,w,h" string,
-size 64 by default (vim.g.alt_img.crop_cache_size)
+LRU cache (cs.crop_cache) keyed by "x,y,w,h" string,
+size 256 by default (vim.g.alt_img.crop_cache_size)
 ```
 
 The OSC 1337 width/height fields are then set to `src.w` / `src.h`
@@ -222,5 +223,6 @@ area.
   dims the encoder skips the magick one-shot and uses pure-Lua decode +
   resize. Almost always the user (or `derive_dims`) sets dims, so this
   is rarely hit.
-- **Animated GIFs / WebP.** Input must be PNG; the boundary check in
-  `M.set` (`util.is_png_data`) rejects everything else.
+- **Animated GIFs / WebP.** Input must be PNG. The engine doesn't
+  validate at the boundary — `png.decode` errors deep in the encode
+  pipeline if you hand it non-PNG bytes.

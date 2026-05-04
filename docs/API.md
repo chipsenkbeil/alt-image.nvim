@@ -37,8 +37,8 @@ the same procedure pointed at that branch.
 ## 2. Public surface
 
 Each of `require('alt-img')`, `require('alt-img.iterm2')`, and
-`require('alt-img.sixel')` returns a module table with **exactly four
-entries**:
+`require('alt-img.sixel')` returns a module table covering the four
+upstream entries:
 
 | Name | Signature | Visibility |
 |---|---|---|
@@ -47,9 +47,18 @@ entries**:
 | `del` | `(id: integer) -> boolean` | public |
 | `_supported` | `(opts?: { timeout?: integer }) -> boolean, string?` | `@private` |
 
-Nothing else is exposed. No `refresh`, no `_state`, no `_provider`, no
-`_emit_at` / `_build_at` / `_precompute_async` on these modules. The
-`api_surface_spec.lua` test (§6) enforces this.
+Two diagnostic accessors live alongside the upstream surface — they're
+not part of `vim.ui.img` and exist only for `:checkhealth alt-img` /
+`:AltImg info`:
+
+| Name | Where | Returns |
+|---|---|---|
+| `provider` | `init.lua` only | the autodetect-resolved provider module |
+| `placements` | `iterm2.lua`, `sixel.lua` only | `{ [id] = vim.ui.img.Opts }` snapshot of active placements |
+
+Nothing else. No `refresh`, no `_state`, no `_emit_at` / `_build_at` /
+`_precompute_async`, no other underscored escape hatches. The `make lint`
+script (§6) enforces the underscore rule on init/iterm2/sixel.
 
 ### `set(data_or_id, opts) -> integer`
 
@@ -130,33 +139,34 @@ own.
 
 ## 6. Enforcement
 
-Three guards keep this contract from drifting:
+Two guards keep this contract from drifting:
 
-1. **`test/api_surface_spec.lua`** — enumerates `pairs(M)` for each of
-   the three public modules and asserts the key set is exactly
-   `{ set, get, del, _supported }`.
-2. **`make lint`** — greps `lua/alt-img/init.lua`,
+1. **`make lint`** — greps `lua/alt-img/init.lua`,
    `lua/alt-img/iterm2.lua`, `lua/alt-img/sixel.lua` for `M\._[a-z_]+`
    patterns; the only allowed match is `_supported`.
-3. **`make verify-api`** — diffs the function signatures and Opts
+2. **`make verify-api`** — diffs the function signatures and Opts
    fields quoted in this document against the pinned upstream SHAs in
    `~/projects/neovim`.
+
+There is no automated functional test suite. Behavior verification is
+manual via `make smoke-test` and `:checkhealth alt-img …`. Any future
+tests must exercise behavior strictly through the public `vim.ui.img`
+API and observable terminal output (`nvim_ui_send`) — no reaching into
+module internals.
 
 ---
 
 ## 7. What is private and how it's hidden
 
-- Top-level files (`init.lua`, `iterm2.lua`, `sixel.lua`, `health.lua`)
-  are the only files at `lua/alt-img/`.
-- Provider implementation (state, canonicalize, derive_dims, emit_at,
-  build_at, the `_supported` probe) lives as **Lua locals** at file
-  scope inside `iterm2.lua` and `sixel.lua` — never on `M`.
-- Cross-cutting infra lives under `_core/`. The `_` prefix marks the
-  folder private; files inside don't need underscores.
-- Provider-specific subroutines that are too large for the surface
-  file live under `iterm2/` or `sixel/` with a `_` prefix
-  (e.g. `sixel/_encode.lua`).
-- Tests are integration tests: drive `set/get/del`, capture bytes via
-  `test/helpers.lua`'s `H.setup_capture`, parse via
-  `H.parse_iterm2_seq` / `H.parse_sixel_seq`. They do **not** reach
-  into provider state or call internal helpers.
+- Top-level files at `lua/alt-img/`: `init.lua`, `iterm2.lua`,
+  `sixel.lua`, `health.lua`. Each holds either the public surface or
+  health, nothing else.
+- The codec adapters (`iterm2.lua`, `sixel.lua`) are thin: they declare
+  the protocol-specific encode helpers as Lua locals and hand them to
+  `_core/provider.new(codec)` which returns the actual module table.
+- Cross-cutting infrastructure lives under `_core/`. The leading `_`
+  marks the folder private; files inside don't need their own
+  underscore prefix.
+- Provider-specific subroutines too large for the surface file live
+  under `iterm2/` or `sixel/` with a `_` prefix (e.g.
+  `sixel/_encode.lua`).

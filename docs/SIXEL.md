@@ -107,7 +107,7 @@ display, instead of the requested 4×4 cells.
 
 Detection: see [`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-dpi--pixel-scale-auto-detection).
 The encoder multiplies its sixel target dims by
-`util.terminal_pixel_scale()`:
+`pixel_scale.current()`:
 
 ```
 target_w_px = opts.width  × cell_w_px × scale
@@ -176,7 +176,7 @@ list. Probe timeout defaults to 1000ms; smoke test 200ms.
                      ▼
               build_sixel(state)
             ┌─────────────────────────────────────────┐
-            │ if cache hit (s.sixel_cache): return    │
+            │ if cache hit (cs.full_sixel): return    │
             │                                         │
             │ scale = sixel_scale()  -- §3            │
             │                                         │
@@ -193,22 +193,22 @@ list. Probe timeout defaults to 1000ms; smoke test 200ms.
             │   ensure_resized(state)                 │
             │     ┌─────────────────────────────┐     │
             │     │ png.decode → image.resize   │     │
-            │     │   (libz FFI or stored block;│     │
-            │     │   nearest-neighbor)         │     │
+            │     │   (decode uses libz FFI when│     │
+            │     │   present; resize is pure-Lua) │   │
             │     └─────────────────────────────┘     │
             │   if scale > 1: image.resize × scale    │
-            │   senc.encode_sixel_dispatch(rgba, w, h)│
+            │   _encode.encode_sixel_dispatch(rgba, w, h)
             └─────────────────────────────────────────┘
                      │
                      ▼
-                s.sixel_cache
+                cs.full_sixel
                      │
                      ▼
-            _emit_at: cursor save/hide → CUP move →
-            sixel bytes → cursor restore/show
+            engine wraps payload with cursor
+            save/hide/move/restore framing
                      │
                      ▼
-             util.term_send (= nvim_ui_send)
+             term_io.send (= nvim_ui_send)
                      │
                      ▼
               terminal renders pixels
@@ -245,9 +245,9 @@ encode_sixel_dispatch(rgba, w, h)
 It does:
 
 1. **Quantization (median-cut)** down to a configurable palette
-   (default 256). Pixels are packed into a u32 RGBA array via FFI for
-   the inner loop. Buckets recursively split on the longest channel
-   range.
+   (default 256). Pixels are packed into a Lua array of integers
+   (one packed RGB int per pixel, -1 for transparent) and bucketed
+   recursively on the longest channel range.
 2. **Sixel band emission**. For each 6-row band (top-to-bottom, the
    sixel format's atomic vertical unit):
    - For each color in the palette, build a bitmask per output column
@@ -259,10 +259,10 @@ It does:
      a partial band.
 
 Output starts with `\ePq"1;1;w;h` so it doesn't need normalization (no
-DCS params). Performance on a 444×431 RGBA buffer is comparable to
-magick (~700 ms vs ~750 ms; see `test/benchmark.out.md`) — JIT-friendly
-loops compete favorably with the subprocess fork+exec overhead at this
-size.
+DCS params). The pure-Lua path is the deepest fallback — magick or
+img2sixel are preferred whenever they're on PATH. After the FFI
+removal it's noticeably slower than the previous LuaJIT-only version
+on PUC Lua, which is the price of broader portability.
 
 ---
 
@@ -280,11 +280,11 @@ magick - -sample FULLxFULL! -crop WxH+X+Y \
        │ falls back to
        ▼
 ensure_resized → image.resize (× scale) →
-image.crop_rgba → senc.encode_sixel_dispatch
+image.crop_rgba → _encode.encode_sixel_dispatch
        │
        ▼
 sixel string cached in
-s.sixel_cache_by_src[ "x,y,w,h" ]   (LRU 64)
+cs.crop_cache[ "x,y,w,h" ]   (LRU 256 by default)
 ```
 
 There is NO pure-Lua path that mutates an existing sixel string in
