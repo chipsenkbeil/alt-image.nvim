@@ -82,6 +82,12 @@ vim.g.alt_img = {
   -- 1, 2, … to force a value when auto-detect misreads your terminal.
   sixel_pixel_scale = nil,              -- integer | nil
 
+  -- Override the terminal cell pixel size as `{ width_px, height_px }`.
+  -- `nil` = probe via CSI 16t (default). Set explicitly when your
+  -- terminal doesn't answer CSI 16t or you want to skip the ~250 ms
+  -- probe timeout on first call.
+  cell_pixel_size = nil,                -- { integer, integer } | nil
+
   -- Background pre-encode of crop variants on `set()` so subsequent partial
   -- redraws hit warm cache. `enabled = false` disables the warmer entirely.
   precompute = {
