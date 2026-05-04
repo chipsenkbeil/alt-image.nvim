@@ -23,7 +23,9 @@ function M.current()
 end
 
 local function query_csi16t()
-    local timeout = 500
+    -- 250 ms is enough for any terminal that answers CSI 16t at all; the
+    -- defaults above are good fallbacks if the probe times out.
+    local timeout = 250
     local done = false
     require("alt-img._core.tty").query("\027[16t", { timeout = timeout }, function(resp)
         local h, w = resp:match("^\027%[6;(%d+);(%d+)t$")

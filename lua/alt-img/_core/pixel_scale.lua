@@ -63,7 +63,11 @@ local function query_geometry()
         return 0
     end
 
-    local timeout = 300
+    -- 200 ms is enough for any terminal that answers CSI 14t/18t at all
+    -- (responsive terminals reply in well under 50 ms over a local TTY).
+    -- Terminals that don't answer used to cost us 350 ms each here for no
+    -- benefit, which dominated first-render latency.
+    local timeout = 200
     local win_w, win_h, cols, rows
     local done14, done18 = false, false
     local tty = require("alt-img._core.tty")
@@ -116,6 +120,17 @@ end
 function M.current()
     if not queried then
         queried = true
+        -- Windows Terminal reports cell pixel sizes already in physical
+        -- pixels via CSI 16t; there is no logical/physical scale split to
+        -- recover. Skipping the CSI 14t/18t round-trips here avoids ~700ms
+        -- of timeout-bound waiting on the first vim.ui.img.set() call,
+        -- which dominates first-render latency on Windows.
+        if vim.env.WT_SESSION and vim.env.WT_SESSION ~= "" then
+            from_osc1337 = 0
+            from_geometry = 0
+            scale = 1
+            return scale
+        end
         from_osc1337 = query_osc1337()
         from_geometry = query_geometry()
         scale = math.max(from_osc1337, from_geometry, 1)
