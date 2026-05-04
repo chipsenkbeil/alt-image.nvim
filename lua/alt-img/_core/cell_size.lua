@@ -60,11 +60,29 @@ end
 
 ---Synchronously query the terminal for cell pixel dimensions via CSI 16t.
 ---Cached; cleared on VimResized / UIEnter so the next call re-queries.
+---Skipped entirely when `vim.g.alt_img.cell_pixel_size = { w, h }` is set —
+---the override populates the cache directly, useful on terminals that
+---don't answer CSI 16t and for headless tests that don't want the
+---timeout.
 function M.query()
     if queried then
         return
     end
     queried = true
+    local cfg = require("alt-img._core.config").read()
+    local override = cfg.cell_pixel_size
+    if
+        type(override) == "table"
+        and type(override[1]) == "number"
+        and type(override[2]) == "number"
+        and override[1] > 0
+        and override[2] > 0
+    then
+        cell_w, cell_h = math.floor(override[1]), math.floor(override[2])
+        last_probe_ms = 0
+        last_probe_answered = true
+        return
+    end
     query_csi16t()
 end
 

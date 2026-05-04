@@ -26,6 +26,7 @@
 ---@field chafa? string|string[]|false  chafa CLI candidate(s); preferred for transparent PNGs
 ---@field libz? string|string[]|false  libz dylib name(s) to ffi.load; false forces pure-Lua INFLATE
 ---@field sixel_pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
+---@field cell_pixel_size? integer[]  explicit { width, height } override for terminal cell size (nil = CSI 16t probe)
 ---@field precompute? alt-img._core.PrecomputeConfig  background crop-variant warmer
 ---@field cache? alt-img._core.CacheConfig  on-disk encode cache
 ---@field placeholder? alt-img._core.PlaceholderConfig  loading-state placeholder rendering

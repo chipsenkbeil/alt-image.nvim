@@ -7,6 +7,7 @@
 vim.opt.runtimepath:prepend(vim.uv.cwd())
 
 local Assert = require("test.assert")
+local Harness = require("test.harness")
 
 local args = arg or {}
 local filter, only_unit, only_e2e
@@ -46,7 +47,25 @@ local env = setmetatable({
             suite = current_suite or "(no suite)",
             type = "harness",
             name = name,
-            fn = fn,
+            -- Pass a fresh ctx wrapper so each harness block gets its
+            -- own spawn helper. Block decides when to spawn / close.
+            fn = function()
+                local nvims = {}
+                local ctx = {
+                    spawn = function(_, opts)
+                        local n = Harness.spawn(opts)
+                        nvims[#nvims + 1] = n
+                        return n
+                    end,
+                }
+                local ok, err = pcall(fn, ctx)
+                for _, n in ipairs(nvims) do
+                    pcall(n.close, n)
+                end
+                if not ok then
+                    error(err, 0)
+                end
+            end,
         }
     end,
     assert = Assert,
@@ -118,14 +137,16 @@ end
 
 local total_ms = (vim.uv.hrtime() - started_ns) / 1e6
 
-print(string.format("\n%d passed, %d failed in %.0fms (%d total)", pass, fail, total_ms, #filtered))
+io.stdout:write(string.format("\n%d passed, %d failed in %.0fms (%d total)\n", pass, fail, total_ms, #filtered))
 
 if fail > 0 then
-    print("\nFailed:")
+    io.stdout:write("\nFailed:\n")
     for _, f in ipairs(failures) do
-        print("  " .. f.label)
-        print("    " .. tostring(f.err))
+        io.stdout:write("  " .. f.label .. "\n")
+        io.stdout:write("    " .. tostring(f.err) .. "\n")
     end
+    io.stdout:flush()
     os.exit(1)
 end
+io.stdout:flush()
 os.exit(0)

@@ -82,6 +82,12 @@ vim.g.alt_img = {
   -- 1, 2, … to force a value when auto-detect misreads your terminal.
   sixel_pixel_scale = nil,              -- integer | nil
 
+  -- Override the terminal cell pixel size as `{ width_px, height_px }`.
+  -- `nil` = probe via CSI 16t (default). Set explicitly when your
+  -- terminal doesn't answer CSI 16t or you want to skip the ~250 ms
+  -- probe timeout on first call.
+  cell_pixel_size = nil,                -- { integer, integer } | nil
+
   -- Background pre-encode of crop variants on `set()` so subsequent partial
   -- redraws hit warm cache. `enabled = false` disables the warmer entirely.
   precompute = {
@@ -185,14 +191,30 @@ make smoke-test    # launches nvim with test/manual_init.lua. Then:
                    #   :AltImgTest mouse {ui|editor|off}
                    #   :AltImgTest provider {iterm2|sixel|auto}
                    #   :AltImg info / :AltImg refresh
+make test          # full suite (unit + e2e)
+make test-unit     # unit only — in-process, fast
+make test-e2e      # e2e only — spawn child nvim per block
 make format-check  # stylua format gate
 make format        # format using stylua
 make lint          # public-surface guard
 ```
 
-There is no automated functional test suite. Behavior verification is
-manual via the smoke harness; future tests must drive the public
-`vim.ui.img` API only.
+`FILTER='lua-pattern'` narrows any of the test targets — matched against
+`suite_name:block_name`.
+
+### Test layout
+
+- `test/unit/**` — `it()` blocks that exercise pure modules in-process
+  (async driver, placeholder compose, png libz config). Fast; no child
+  nvim.
+- `test/e2e/**` — `harness()` blocks that spawn a fresh headless child
+  nvim per block, drive it via msgpack-RPC through the public
+  `vim.ui.img.set / get / del` API, and observe behavior black-box: raw
+  bytes captured from `nvim_ui_send`, extmarks across all namespaces,
+  floating-window buffers. No `_*` test hooks in production code.
+
+The runner (`test/runner.lua`) discovers `describe`/`it`/`harness`
+blocks via `setfenv`-injected globals and reports per-block timing.
 
 ## Limitations
 
