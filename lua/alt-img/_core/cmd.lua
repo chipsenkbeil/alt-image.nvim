@@ -1,22 +1,12 @@
--- Subcommand implementations for the production `:AltImg` user command.
--- Layout follows the lumen-oss nvim-best-practices pattern: a single
--- top-level command dispatches to entries in `M.subcommands`, each
--- carrying an `impl` (and optional `complete`) callback. The plugin
--- script in `plugin/alt-img.lua` is the only auto-loaded file; this
--- module is `require()`d lazily by the dispatcher so plugin startup
--- stays cheap.
-
 local M = {}
 
----@class altimg.Subcommand
+---@class alt-img._core.Subcommand
 ---@field impl fun(args:string[], opts:table)
 ---@field complete? fun(arg_lead:string):string[]
 ---@field desc? string
 
----Resolve a friendly name for the active vim.ui.img provider, including
----the underlying choice when the autodetect dispatcher is in use. Falls
----back to a `<not active>` string when the user hasn't loaded any of our
----providers — `:AltImg info` still prints something useful in that case.
+---Friendly name for the active vim.ui.img provider, including the
+---autodetect-resolved choice when the dispatcher is in use.
 ---@return string
 local function provider_name()
     local img = vim.ui.img
@@ -33,7 +23,7 @@ local function provider_name()
     end
     local ok_dispatcher, dispatcher = pcall(require, "alt-img")
     if ok_dispatcher and img == dispatcher then
-        local ok, p = pcall(dispatcher._provider)
+        local ok, p = pcall(dispatcher.provider)
         if not ok or not p then
             return "alt-img (autodetect, not yet resolved)"
         end
@@ -48,18 +38,17 @@ local function provider_name()
     return "<unknown vim.ui.img provider>"
 end
 
----Append a per-placement listing of `mod._state` to `lines`. Used by
----`info` to surface what each provider has open and what its resolved
----opts → target pixel dims look like.
+---Append a per-placement listing for `mod` (a provider module exposing
+---`placements()`) to `lines`. Surfaces resolved opts → target pixel dims.
 ---@param lines string[]
 ---@param label string
----@param mod table provider module exposing `_state`
+---@param mod table
 ---@param cw integer cell width in pixels
 ---@param ch integer cell height in pixels
 local function dump_placements(lines, label, mod, cw, ch)
-    local state = (mod and mod._state) or {}
+    local placements = (mod and type(mod.placements) == "function" and mod.placements()) or {}
     local ids = {}
-    for id, _ in pairs(state) do
+    for id, _ in pairs(placements) do
         ids[#ids + 1] = id
     end
     table.sort(ids)
@@ -69,7 +58,7 @@ local function dump_placements(lines, label, mod, cw, ch)
     end
     lines[#lines + 1] = string.format("  %s:", label)
     for _, id in ipairs(ids) do
-        local o = state[id].opts or {}
+        local o = placements[id] or {}
         lines[#lines + 1] = string.format(
             "    id=%d  relative=%s  row=%s col=%s  width=%s height=%s  buf=%s  → target=%s×%s px",
             id,
@@ -85,12 +74,11 @@ local function dump_placements(lines, label, mod, cw, ch)
     end
 end
 
----Build the diagnostic dump as a list of lines so callers (the user
----command, tests, future hover-buffer integrations) can format it as
----they like.
+---Build the `:AltImg info` diagnostic dump as a list of lines.
 ---@return string[]
 function M.info_lines()
-    local util = require("alt-img._core.util")
+    local cell_size = require("alt-img._core.cell_size")
+    local pixel_scale = require("alt-img._core.pixel_scale")
     local g = vim.g.alt_img or {}
 
     local lines = {
@@ -108,13 +96,12 @@ function M.info_lines()
         string.format("  version         = v%d.%d.%d", vim.version().major, vim.version().minor, vim.version().patch),
     }
 
-    pcall(util.query_cell_size)
-    local cw, ch = util.cell_pixel_size()
+    pcall(cell_size.query)
+    local cw, ch = cell_size.current()
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Cell pixel size (CSI 16t):"
     lines[#lines + 1] = string.format("  width  = %d px", cw)
     lines[#lines + 1] = string.format("  height = %d px", ch)
-    lines[#lines + 1] = string.format("  queried = %s", tostring(util._cell_size_queried))
 
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Active vim.ui.img provider:"
@@ -141,8 +128,8 @@ function M.info_lines()
 
     -- sixel pixel scale: explicit override + per-source auto-detect breakdown +
     -- the value the encoder will actually multiply by.
-    local osc, geom = util.terminal_pixel_scale_sources()
-    local final_auto = util.terminal_pixel_scale()
+    local osc, geom = pixel_scale.sources()
+    local final_auto = pixel_scale.current()
     local effective = (type(g.sixel_pixel_scale) == "number" and g.sixel_pixel_scale >= 1)
             and math.floor(g.sixel_pixel_scale)
         or final_auto
@@ -162,13 +149,9 @@ function M.info_lines()
     return lines
 end
 
----Open a scratch buffer in a horizontal split below, populate it with
----`lines`, mark non-modifiable, and bind `q` to close. We use a buffer
----instead of print() so the diagnostic dump never triggers nvim's
----hit-enter prompt — and therefore never causes the terminal-side full
----redraw that wipes our image cells. Closing the split fires WinClosed,
----which the render loop's force-dirty autocmd group already covers, so
----placements re-emit naturally.
+---Open a non-modifiable scratch buffer below, populated with `lines`. `q`
+---closes. Using a buffer (not print()) avoids nvim's hit-enter prompt and
+---the terminal redraw that wipes image cells with it.
 ---@param title string buffer name (e.g. "alt-img://info")
 ---@param lines string[]
 ---@return nil
@@ -180,7 +163,7 @@ local function open_scratch(title, lines)
     vim.bo[buf].swapfile = false
     vim.bo[buf].modifiable = false
     vim.bo[buf].readonly = true
-    vim.bo[buf].filetype = "altimginfo"
+    vim.bo[buf].filetype = "alt-img-info"
     pcall(vim.api.nvim_buf_set_name, buf, title)
     -- Cap the split height so a long dump doesn't claim the whole screen.
     local height = math.min(#lines + 1, math.max(10, math.floor(vim.o.lines * 0.5)))
@@ -199,7 +182,7 @@ local function open_scratch(title, lines)
     vim.keymap.set("n", "<Esc>", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true })
 end
 
----@type table<string, altimg.Subcommand>
+---@type table<string, alt-img._core.Subcommand>
 M.subcommands = {
     info = {
         desc = "Open a scratch buffer with runtime diagnostics (terminal env, cell size, scale, active placements). `q` to close.",

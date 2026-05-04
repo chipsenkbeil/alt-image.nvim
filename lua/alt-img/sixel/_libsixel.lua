@@ -3,28 +3,8 @@ local M = {}
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-    local util = require("alt-img._core.util")
     local config = require("alt-img._core.config")
-    return util.resolve_binary(config.read().img2sixel)
-end
-
----Run a subprocess synchronously and return stdout on success, nil on fail.
----@param cmd string[]
----@param stdin string
----@return string?
-local function run(cmd, stdin)
-    local ok, res = pcall(function()
-        return vim.system(cmd, { stdin = stdin, text = false }):wait()
-    end)
-    if not ok or not res or res.code ~= 0 then
-        if res and res.stderr and #res.stderr > 0 then
-            vim.schedule(function()
-                vim.notify_once(("alt-img: %s failed: %s"):format(cmd[1], res.stderr), vim.log.levels.DEBUG)
-            end)
-        end
-        return nil
-    end
-    return res.stdout
+    return require("alt-img._core.binary").resolve(config.read().img2sixel)
 end
 
 ---Pipe PNG bytes into img2sixel and return the sixel DCS string, nil on fail.
@@ -41,7 +21,7 @@ function M.encode_sixel(png_bytes, colors)
         cmd[#cmd + 1] = "-p"
         cmd[#cmd + 1] = tostring(colors)
     end
-    return run(cmd, png_bytes)
+    return require("alt-img._core.subprocess").run(cmd, png_bytes)
 end
 
 return M

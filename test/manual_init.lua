@@ -9,8 +9,7 @@ vim.opt.mousemoveevent = true
 
 vim.cmd.source(vim.uv.cwd() .. "/plugin/alt-img.lua")
 
-local altimg = require("alt-img")
-vim.ui.img = altimg
+vim.ui.img = require("alt-img")
 
 -- ---------------------------------------------------------------------------
 -- Image source for :AltImgTest demo / mouse. Defaults to the vendored 4x4
@@ -106,7 +105,7 @@ local function provider_name()
         return "alt-img.sixel"
     end
     if img == require("alt-img") then
-        local ok, p = pcall(img._provider)
+        local ok, p = pcall(img.provider)
         if ok and p == iterm2 then
             return "alt-img (autodetect → alt-img.iterm2)"
         end

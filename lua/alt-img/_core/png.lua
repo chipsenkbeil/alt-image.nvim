@@ -1,16 +1,3 @@
--- Pure-Lua PNG codec used by both providers.
---   * Decoder: handles 8-bit non-interlaced PNGs (color types 0/2/3/4/6).
---     Uses libz `uncompress` via FFI when available; falls back to a pure-Lua
---     DEFLATE inflater (fixed + dynamic Huffman, stored blocks).
---   * Encoder: emits 8-bit RGBA PNG. Uses libz `compress2` via FFI when
---     available for real DEFLATE; otherwise falls back to a stored-block
---     zlib stream (still a valid PNG, just larger wire size).
---
--- API:
---   decode(bytes) -> { width, height, pixels = rgba_string }
---   encode(rgba, width, height) -> png_bytes
---   has_libz() -> boolean (true when the encoder uses real DEFLATE)
-
 local M = {}
 
 local bit = require("bit")
@@ -18,18 +5,15 @@ local band, bor, lshift, rshift = bit.band, bit.bor, bit.lshift, bit.rshift
 
 local PNG_SIGNATURE = "\137PNG\r\n\26\n"
 
--- =============================================================================
--- Decoder
--- =============================================================================
+-- Decoder ---------------------------------------------------------------
 
+-- Optional libz FFI fast path. "z" is libz on Linux/macOS; "zlib1"/"zlib"/
+-- "libz" cover Windows (zlib1.dll) and odd packagings. Falls through to the
+-- pure-Lua inflater below when none load.
 local _zlib_uncompress ---@type fun(data:string, expected:integer):string?
 do
     local ok, ffi = pcall(require, "ffi")
     if ok then
-        -- Match the encoder's lookup names below — "z" picks up libz on
-        -- Linux/macOS, "zlib1"/"zlib"/"libz" cover Windows (zlib1.dll) and
-        -- odd packagings. Without this, decode falls all the way back to
-        -- the pure-Lua inflater, which dominates first-render latency.
         local zlib
         for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
             local zok, lib = pcall(ffi.load, name)
@@ -659,9 +643,7 @@ function M.decode(data)
     }
 end
 
--- =============================================================================
--- Encoder
--- =============================================================================
+-- Encoder ---------------------------------------------------------------
 
 -- Precomputed CRC32 table (poly 0xEDB88320, the reflected/zlib variant).
 local crc32_table = {}
@@ -752,9 +734,9 @@ local function zlib_store(raw)
     return table.concat(parts)
 end
 
--- Try to load libz via LuaJIT FFI. On any failure (no FFI, no libz, ABI
--- mismatch, runtime error) we leave libz_compress nil and fall back to the
--- pure-Lua stored-block encoder.
+-- Optional libz FFI compress fast path. Any failure (no FFI, no libz, ABI
+-- mismatch, runtime error) leaves libz_compress nil and the encoder falls
+-- back to `zlib_store` (uncompressed but valid PNG).
 ---@type (fun(data: string, level?: integer): string?)?
 local libz_compress
 
@@ -765,9 +747,6 @@ local _libz_ok = pcall(function()
     int compress2(uint8_t *dest, alt_img_uLongf *destLen,
                   const uint8_t *source, alt_img_uLongf sourceLen, int level);
   ]])
-    -- Try the conventional names across platforms. "z" picks up libz.so /
-    -- libz.dylib on Linux/macOS; "zlib1" / "zlib" / "libz" cover native
-    -- Windows installs (zlib1.dll) and odd packagings.
     local libz
     for _, name in ipairs({ "z", "zlib", "zlib1", "libz" }) do
         local lok, lib = pcall(ffi.load, name)
@@ -813,7 +792,7 @@ local function zlib_compress(raw)
 end
 
 ---Whether the FFI libz path is active (real DEFLATE) or we're using the
----stored-block fallback. Useful for healthchecks and tests.
+---stored-block fallback. Surfaced via :checkhealth.
 ---@return boolean
 function M.has_libz()
     return libz_compress ~= nil
@@ -846,9 +825,5 @@ function M.encode(rgba, width, height)
 
     return PNG_SIGNATURE .. ihdr .. idat .. iend
 end
-
--- Internal helpers exposed for testing.
-M._crc32 = crc32
-M._adler32 = adler32
 
 return M

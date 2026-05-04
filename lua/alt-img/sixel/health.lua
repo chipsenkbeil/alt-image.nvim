@@ -13,11 +13,13 @@ function M.check()
             "Sixel protocol: not detected. "
                 .. (
                     msg
-                    or "Detection failed. Try a sixel-capable terminal "
+                    or (
+                        "Detection failed. Try a sixel-capable terminal "
                         .. "(Windows Terminal, iTerm.app, WezTerm, foot, mlterm, "
                         .. "contour, xterm with +sixel build), "
                         .. "or set TERM=xterm-sixel, or set "
                         .. 'or set vim.ui.img = require("alt-img.sixel") to force.'
+                    )
                 )
         )
     end

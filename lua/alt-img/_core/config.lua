@@ -1,111 +1,38 @@
--- Single source of truth for alt-img's user-facing config.
---
--- Per nvim-best-practices (lumen-oss/nvim-best-practices), the plugin works
--- out of the box without a setup() function. Users override individual fields
--- via the global table:
---
---   vim.g.alt_img = {
---     magick                       = { 'magick', 'convert' },  -- string | string[] | false
---     img2sixel                    = 'img2sixel',              -- string | string[] | false
---     crop_cache_size              = 256,                      -- integer (LRU max per placement)
---     sixel_pixel_scale            = nil,                      -- integer override; nil = auto
---     precompute_crops             = true,                     -- background pre-encode on set()
---     precompute_interval_ms       = 30,                       -- ms between precompute steps
---     precompute_start_delay_ms    = 500,                      -- ms before first step fires
---     precompute_idle_threshold_ms = 500,                      -- skip step if user active within this window
---     precompute_max_concurrent    = 2,                        -- max parallel async magick subprocesses
---     precompute_notify            = false,                    -- vim.notify on precompute start/finish
---   }
---
--- `sixel_pixel_scale` exists because iTerm2 (and a few others, e.g.
--- WezTerm) report cell sizes in LOGICAL pixels via CSI 16t but render
--- sixel at PHYSICAL pixels — so a 32x64 sixel on a 2x display shows up
--- at 16x32 logical pixels, not the 4x4 cells the encoder asked for.
--- When unset (the default), the sixel encoder discovers the scale by
--- comparing CSI 14t (window pixels) ÷ CSI 18t (window characters)
--- against CSI 16t (cell pixels): if the implied per-cell size is
--- meaningfully larger than CSI 16t reports, the ratio is the scale.
--- Same approach chafa uses; works on every modern terminal. Setting
--- an integer here forces a specific multiplier and skips the auto-
--- detect.
---
--- All fields are optional; missing fields fall back to the defaults below.
--- Read happens at call-time (not require-time) so user config can be set
--- before *or* after the plugin is loaded and still take effect.
---
--- Note: shallow merge via vim.tbl_extend, not deep merge. A deep merge would
--- index-extend arrays (e.g. user's `magick = { 'gm' }` over default
--- `{ 'magick', 'convert' }` would produce `{ 'gm', 'convert' }` instead of
--- replacing the list outright). All our config fields are scalars or arrays
--- with no nested tables, so shallow merge is correct here.
-
----@class altimg.Config
----@field magick? string|string[]|false
----@field img2sixel? string|string[]|false
----@field crop_cache_size? integer
----@field sixel_pixel_scale? integer
----@field precompute_crops? boolean
----@field precompute_interval_ms? integer
----@field precompute_start_delay_ms? integer
----@field precompute_idle_threshold_ms? integer
----@field precompute_max_concurrent? integer
----@field precompute_notify? boolean
+---@class alt-img._core.Config
+---@field magick? string|string[]|false  magick CLI candidate(s); false disables
+---@field img2sixel? string|string[]|false  img2sixel CLI candidate(s); false disables
+---@field crop_cache_size? integer  per-placement LRU max for cached crop encodings
+---@field sixel_pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
+---@field precompute_crops? boolean  background pre-encode on set()
+---@field precompute_interval_ms? integer  ms between precompute steps
+---@field precompute_start_delay_ms? integer  ms before first step fires
+---@field precompute_idle_threshold_ms? integer  skip step if user active within this window
+---@field precompute_max_concurrent? integer  max parallel async magick subprocesses
+---@field precompute_notify? boolean  vim.notify on precompute start/finish
 
 local M = {}
 
----@type altimg.Config
+-- LRU sizing rule: `crop_cache_size` must be ≥ 2*(image_height_cells - 1)
+-- for `precompute_crops` to be lossless; 256 fits images up to ~128 cells
+-- tall. `sixel_pixel_scale` is intentionally absent so nil means
+-- "auto-detect via pixel_scale.current()"; any integer wins over auto.
+---@type alt-img._core.Config
 local DEFAULTS = {
     magick = { "magick", "convert" },
     img2sixel = { "img2sixel" },
-    -- LRU max for the per-placement cropped-encoding cache. Must be ≥
-    -- 2*(image_height_cells - 1) for `precompute_crops` to be lossless;
-    -- 256 is enough for images up to ~128 cells tall (typical embedded
-    -- images are well under that).
     crop_cache_size = 256,
-    -- Background pre-compute of cropped variants on placement creation.
-    -- See _core/precompute.lua. Disable with `precompute_crops = false`
-    -- if the foreground encode-on-demand cost is preferable to the
-    -- background magick / img2sixel work.
     precompute_crops = true,
     precompute_interval_ms = 30,
-    -- Initial delay before the first precompute step fires after set().
-    -- Gives the caller a window to register additional placements
-    -- (e.g. spawning a mouse-follow image right after the main image)
-    -- without precompute monopolizing main-thread cycles for the
-    -- in-flight set()s.
     precompute_start_delay_ms = 500,
-    -- Skip a precompute step if the user has been active (CursorMoved,
-    -- TextChanged, WinScrolled, MouseMove, …) within this window.
-    -- Pauses background work during scroll/typing/mouse-drag so the
-    -- main thread isn't competing with precompute encoding for cycles.
-    -- Set to 0 to disable throttling.
     precompute_idle_threshold_ms = 500,
-    -- When the provider exposes `_precompute_async`, precompute spawns
-    -- magick subprocesses in parallel up to this cap. Each subprocess
-    -- runs in its own OS process; the main thread is only briefly
-    -- busy at dispatch + completion. Set higher for faster warm-up at
-    -- the cost of more concurrent subprocesses.
     precompute_max_concurrent = 2,
-    -- vim.notify on precompute start / finish — useful for diagnosing
-    -- whether perceived lag correlates with background encode work.
-    -- Off by default to avoid log spam.
     precompute_notify = false,
-    -- sixel_pixel_scale is intentionally absent so callers can detect
-    -- "user did not set this" (nil) and fall back to auto-detect via
-    -- util.terminal_pixel_scale(). An explicit integer in vim.g.alt_img
-    -- wins.
 }
 
 ---Return the merged config (defaults overlaid with vim.g.alt_img).
----@return altimg.Config
+---@return alt-img._core.Config
 function M.read()
     return vim.tbl_extend("force", DEFAULTS, vim.g.alt_img or {})
-end
-
----Expose defaults read-only for tests / introspection.
----@return altimg.Config
-function M.defaults()
-    return vim.deepcopy(DEFAULTS)
 end
 
 return M

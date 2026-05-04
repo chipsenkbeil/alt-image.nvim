@@ -1,13 +1,8 @@
 local M = {}
 
-local band = require("bit").band -- luacheck: ignore (kept for parity / future use)
-local bor = require("bit").bor
-local lshift = require("bit").lshift
-local ffi = require("ffi")
-local buffer = require("string.buffer")
-
--- Suppress unused-local warning for `band` if the linter complains.
-_ = band
+local bit = require("bit")
+local bor = bit.bor
+local lshift = bit.lshift
 
 ---Median cut color quantization.
 ---@param colors table list of {r,g,b,key=integer}
@@ -119,7 +114,7 @@ local function _median_cut(colors, max_colors)
 end
 
 ---Quantize packed pixel colors to a palette of at most 256 colors using median cut.
----@param pixel_colors ffi.cdata* int32_t array of packed r*65536+g*256+b values (-1 = transparent)
+---@param pixel_colors integer[] 0-indexed array of packed r*65536+g*256+b values (-1 = transparent)
 ---@param n_pixels integer total number of pixels
 ---@return number[][] palette (list of {r,g,b})
 ---@return table<integer, integer> indexed (position -> 1-based palette index, 0 = transparent)
@@ -170,21 +165,23 @@ local function _quantize_packed(pixel_colors, n_pixels)
     return palette, indexed
 end
 
----Convert RGBA pixel data into a packed int32_t pixel-color array
----(r*65536 + g*256 + b, or -1 for transparent).
+---Convert RGBA pixel data into a packed pixel-color Lua array
+---(r*65536 + g*256 + b, or -1 for transparent). 0-indexed for parity with
+---the rest of this module's pixel arithmetic.
 ---@param rgba string
 ---@param w integer
 ---@param h integer
----@return ffi.cdata* pixel_colors
+---@return integer[] pixel_colors
 ---@return integer n_pixels
 local function _pack_pixels(rgba, w, h)
-    local src = ffi.cast("const uint8_t*", rgba)
     local n_pixels = w * h
-    local pixel_colors = ffi.new("int32_t[?]", n_pixels)
+    local pixel_colors = {}
+    local sb = string.byte
     for i = 0, n_pixels - 1 do
-        local off = i * 4
-        if src[off + 3] >= 128 then
-            pixel_colors[i] = src[off] * 65536 + src[off + 1] * 256 + src[off + 2]
+        local off = i * 4 + 1
+        local r, g, b, a = sb(rgba, off, off + 3)
+        if a >= 128 then
+            pixel_colors[i] = r * 65536 + g * 256 + b
         else
             pixel_colors[i] = -1
         end
@@ -203,53 +200,60 @@ local function _quantize(rgba, w, h)
     return _quantize_packed(pixel_colors, n_pixels)
 end
 
----Encode RGBA pixel data as a sixel DCS string.
+---Append an RLE run for `mask_char` of length `count` to `out`.
+---@param out string[]
+---@param mask_char integer
+---@param count integer
+local function emit_run(out, mask_char, count)
+    if count >= 4 then
+        out[#out + 1] = string.format("!%d%s", count, string.char(mask_char))
+    else
+        local c = string.char(mask_char)
+        for _ = 1, count do
+            out[#out + 1] = c
+        end
+    end
+end
+
+---Encode RGBA pixel data as a sixel DCS string. Pure Lua: no LuaJIT FFI,
+---no string.buffer. Hot path callers should prefer the magick / img2sixel
+---dispatchers in `encode_sixel_dispatch`; this is the deep fallback.
 ---@param rgba string RGBA pixel data
 ---@param w integer width in pixels
 ---@param h integer height in pixels
 ---@return string sixel DCS sequence
 local function _encode_sixel(rgba, w, h)
     local pixel_colors, n_pixels = _pack_pixels(rgba, w, h)
-
-    -- Quantize to palette
     local palette, indexed = _quantize_packed(pixel_colors, n_pixels)
 
-    -- Build sixel output using string.buffer
-    local out = buffer.new()
+    local out = {}
+    out[#out + 1] = string.format('\027Pq"1;1;%d;%d', w, h)
 
-    -- DCS introducer with raster attributes
-    out:put(string.format('\027Pq"1;1;%d;%d', w, h))
-
-    -- Color definitions
     for i, color in ipairs(palette) do
         local r_pct = math.floor(color[1] * 100 / 255 + 0.5)
         local g_pct = math.floor(color[2] * 100 / 255 + 0.5)
         local b_pct = math.floor(color[3] * 100 / 255 + 0.5)
-        out:put(string.format("#%d;2;%d;%d;%d", i - 1, r_pct, g_pct, b_pct))
+        out[#out + 1] = string.format("#%d;2;%d;%d;%d", i - 1, r_pct, g_pct, b_pct)
     end
 
-    -- Encode sixel bands (6 rows each) - single pass per band
     local n_bands = math.ceil(h / 6)
-    -- Reusable per-band structures
-    local bitmasks_by_color = {} -- color_idx -> array of bitmasks per x
-    local active_colors = {}
+    -- Per-band scratch reused via clear-on-entry. `active_colors` keeps its
+    -- fill count in slot [0]; the rest of the array carries 1..count.
+    local bitmasks_by_color = {}
+    local active_colors = { [0] = 0 }
     local active_set = {}
 
     for band_y = 0, n_bands - 1 do
         local y_start = band_y * 6
 
-        -- Clear active tracking
-        for i = 1, #active_colors do
+        for i = 1, active_colors[0] do
             local ci = active_colors[i]
             active_set[ci] = nil
             bitmasks_by_color[ci] = nil
-        end
-        active_colors[0] = 0 -- use [0] as length counter
-        for i = 1, #active_colors do
             active_colors[i] = nil
         end
+        active_colors[0] = 0
 
-        -- Single pass: scan all pixels in this band, build bitmasks per color per x
         for bit_row = 0, 5 do
             local y = y_start + bit_row
             if y >= h then
@@ -262,8 +266,10 @@ local function _encode_sixel(rgba, w, h)
                 if ci ~= 0 then
                     local masks = bitmasks_by_color[ci]
                     if not masks then
-                        -- First time seeing this color in this band
-                        masks = ffi.new("uint8_t[?]", w)
+                        masks = {}
+                        for mx = 0, w - 1 do
+                            masks[mx] = 0
+                        end
                         bitmasks_by_color[ci] = masks
                         if not active_set[ci] then
                             active_set[ci] = true
@@ -279,28 +285,25 @@ local function _encode_sixel(rgba, w, h)
 
         local n_active = active_colors[0]
 
-        -- Sort active colors for deterministic output
         if n_active > 1 then
-            table.sort(active_colors, function(a, b)
-                if a == nil then
-                    return false
-                end
-                if b == nil then
-                    return true
-                end
-                return a < b
-            end)
+            -- Restrict the sort to the populated 1..n_active range so trailing
+            -- nils from prior bands don't confuse the comparator.
+            local sortable = {}
+            for i = 1, n_active do
+                sortable[i] = active_colors[i]
+            end
+            table.sort(sortable)
+            for i = 1, n_active do
+                active_colors[i] = sortable[i]
+            end
         end
 
-        -- Emit RLE for each active color
         for ai = 1, n_active do
             local color_idx = active_colors[ai]
             local masks = bitmasks_by_color[color_idx]
 
-            -- Color select
-            out:put("#", tostring(color_idx - 1))
+            out[#out + 1] = "#" .. tostring(color_idx - 1)
 
-            -- Run-length encode directly to output buffer
             local prev_ch = masks[0] + 63
             local count = 1
             for x = 1, w - 1 do
@@ -308,60 +311,28 @@ local function _encode_sixel(rgba, w, h)
                 if ch == prev_ch then
                     count = count + 1
                 else
-                    if count >= 4 then
-                        out:put(string.format("!%d%s", count, string.char(prev_ch)))
-                    else
-                        local c = string.char(prev_ch)
-                        for _ = 1, count do
-                            out:put(c)
-                        end
-                    end
+                    emit_run(out, prev_ch, count)
                     prev_ch = ch
                     count = 1
                 end
             end
-            -- Flush last run
-            if count >= 4 then
-                out:put(string.format("!%d%s", count, string.char(prev_ch)))
-            else
-                local c = string.char(prev_ch)
-                for _ = 1, count do
-                    out:put(c)
-                end
-            end
+            emit_run(out, prev_ch, count)
 
-            out:put("$") -- Carriage return (same band)
+            out[#out + 1] = "$"
         end
 
-        out:put("-") -- New line (next band)
+        out[#out + 1] = "-"
     end
 
-    -- DCS terminator
-    out:put("\027\\")
-
-    return out:get()
+    out[#out + 1] = "\027\\"
+    return table.concat(out)
 end
 
-M.quantize = _quantize
-M.encode_sixel = _encode_sixel
-
--- ---------------------------------------------------------------------------
--- External-tool dispatchers
--- ---------------------------------------------------------------------------
---
--- These wrap the pure-Lua paths above with optional external-tool fast paths
--- via the `_magick` and `_libsixel` modules. The tools take PNG input on
--- stdin, so callers that already have raw RGBA must pay a single PNG
--- re-encode hop. For the (much more common) crop case the magick wrapper
--- accepts the *original* PNG bytes and runs `<bin> -crop` directly, skipping
--- the decode -> crop -> re-encode round-trip.
---
--- Each call resolves the binary at call-time via the wrapper's `binary()`
--- helpers, so toggling `vim.g.alt_img.{magick,img2sixel}` takes effect
--- without re-requiring this module.
-
----Encode an RGBA buffer to a sixel DCS string, using external tools when
----configured. Priority: img2sixel -> magick/convert -> pure Lua.
+---Encode an RGBA buffer to a sixel DCS string. Priority chain (toggle each
+---via `vim.g.alt_img.{img2sixel,magick}`): img2sixel → magick/convert →
+---pure-Lua `_encode_sixel`. The external tools want PNG on stdin, so RGBA
+---input pays one png.encode hop unless we hit the libz-less magick raw-RGBA
+---fast path.
 ---@param rgba string
 ---@param w_px integer
 ---@param h_px integer

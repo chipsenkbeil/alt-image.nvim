@@ -20,6 +20,14 @@ end
 
 local M = {}
 
+---Resolved provider used by the autodetect dispatch. Forces the resolution
+---if not yet cached. Used by `:checkhealth alt-img` and the manual smoke
+---harness to identify which provider is in play.
+---@return table provider
+function M.provider()
+    return get_instance()
+end
+
 ---@param data_or_id string|integer image bytes (string) or existing id (integer)
 ---@param opts? vim.ui.img.Opts
 ---@return integer id

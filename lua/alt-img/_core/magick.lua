@@ -1,77 +1,25 @@
--- alt-img internal wrapper around the ImageMagick CLI (`magick` / `convert`).
--- Honors `vim.g.alt_img.magick` per the alt-img config contract — see
--- `_core/config.lua`. Returns nil from every helper on any failure so the
--- caller can fall back to the pure-Lua paths.
-
 local M = {}
-
-local _util = require("alt-img._core.util")
-local _config = require("alt-img._core.config")
 
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-    return _util.resolve_binary(_config.read().magick)
+    local config = require("alt-img._core.config")
+    return require("alt-img._core.binary").resolve(config.read().magick)
 end
 
----Run a subprocess synchronously and return stdout on success, nil on fail.
----Surfaces stderr to the user once via vim.notify_once so ImageMagick policy
----errors etc. are visible, without spamming.
----@param cmd string[]
----@param stdin string
----@return string? stdout
 local function run(cmd, stdin)
-    local ok, res = pcall(function()
-        return vim.system(cmd, { stdin = stdin, text = false }):wait()
-    end)
-    if not ok or not res or res.code ~= 0 then
-        if res and res.stderr and #res.stderr > 0 then
-            vim.schedule(function()
-                vim.notify_once(("alt-img: %s failed: %s"):format(cmd[1], res.stderr), vim.log.levels.DEBUG)
-            end)
-        end
-        return nil
-    end
-    return res.stdout
+    return require("alt-img._core.subprocess").run(cmd, stdin)
 end
 
----Run a subprocess fully asynchronously: returns immediately, invokes
----`on_done(stdout_or_nil)` from the main loop when the subprocess exits.
----vim.system's callback form runs the callback inside vim.schedule, so
----it's safe to call vim API from inside `on_done`.
----@param cmd string[]
----@param stdin string
----@param on_done fun(stdout: string?)
 local function run_async(cmd, stdin, on_done)
-    local ok = pcall(function()
-        vim.system(cmd, { stdin = stdin, text = false }, function(obj)
-            if obj.code ~= 0 or not obj.stdout or #obj.stdout == 0 then
-                if obj.stderr and #obj.stderr > 0 then
-                    vim.schedule(function()
-                        vim.notify_once(("alt-img: %s failed: %s"):format(cmd[1], obj.stderr), vim.log.levels.DEBUG)
-                    end)
-                end
-                on_done(nil)
-            else
-                on_done(obj.stdout)
-            end
-        end)
-    end)
-    if not ok then
-        on_done(nil)
-    end
+    require("alt-img._core.subprocess").run_async(cmd, stdin, on_done)
 end
 
----Normalize magick's sixel DCS introducer so it matches `img2sixel`'s
----output, and what most sixel terminals actually render correctly.
----
----magick emits `ESC P 0;0;0 q ...` — explicit DCS params with P1=0. Per
----the VT3xx convention, P1=0 selects the default 2:1 pixel-aspect ratio,
----so terminals that honor that field (notably iTerm2's sixel decoder)
----scale the image vertically and ignore the raster `"pan;pad;w;h`
----override that magick emits right after. Stripping the DCS params
----collapses the introducer to `ESC P q ...` (img2sixel's shape), which
----makes terminals fall back to the raster attribute and render at the
+---Strip magick's `ESC P 0;0;0 q` DCS params down to `ESC P q` (img2sixel's
+---shape). magick's P1=0 selects 2:1 pixel-aspect under the VT3xx convention,
+---which iTerm2's decoder honors and the encoded raster attribute does not
+---override — terminals end up scaling the image vertically. Removing the
+---params makes them fall back to the raster attribute and render at the
 ---requested square-pixel size.
 ---@param sixel string?
 ---@return string?
@@ -96,25 +44,6 @@ function M.crop_to_png(png_bytes, x_px, y_px, w_px, h_px)
     end
     local geom = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
     return run({ bin, "-", "-crop", geom, "png:-" }, png_bytes)
-end
-
----Crop a PNG sub-rectangle and emit as a sixel DCS string. Returns nil on
----failure.
----@param png_bytes string
----@param x_px integer
----@param y_px integer
----@param w_px integer
----@param h_px integer
----@param colors integer? max palette size (default 256)
----@return string?
-function M.crop_to_sixel(png_bytes, x_px, y_px, w_px, h_px, colors)
-    local bin = M.binary()
-    if not bin then
-        return nil
-    end
-    local geom = string.format("%dx%d+%d+%d", w_px, h_px, x_px, y_px)
-    local def = "sixel:colors=" .. tostring(colors or 256)
-    return normalize_sixel_introducer(run({ bin, "-", "-crop", geom, "-define", def, "sixel:-" }, png_bytes))
 end
 
 ---Encode an existing PNG byte string as a sixel DCS string. Returns nil on
@@ -217,20 +146,6 @@ function M.crop_resized_to_sixel(png_bytes, full_w_px, full_h_px, x_px, y_px, w_
         run({ bin, "-", "-sample", sample, "-crop", crop, "-define", def, "sixel:-" }, png_bytes)
     )
 end
-
--- ---------------------------------------------------------------------
--- Async variants (vim.system callback form).
---
--- The sync entry points above all block via `:wait()` — fine for the
--- main render path (the sync block is wrapped in `is_drawing` so timer
--- ticks won't re-enter), but bad for background pre-encoding where the
--- main thread should stay responsive while magick runs. The async
--- variants spawn the subprocess and return immediately; on_done fires
--- from vim.schedule when the subprocess exits, so the main thread is
--- only briefly busy at start (spawn) and end (callback dispatch + cache
--- write). Mouse-follow, scroll, and other autocmd-driven work proceed
--- in parallel with the magick subprocess.
--- ---------------------------------------------------------------------
 
 ---Async: decode + resize + PNG re-encode. Invokes `on_done(png_or_nil)` from
 ---the main loop when the subprocess exits.

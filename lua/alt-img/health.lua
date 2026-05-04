@@ -5,22 +5,19 @@ local PROTOCOLS = { "iterm2", "sixel" }
 
 ---@param h vim.health.Report
 local function active_provider_line(h)
-    -- Report what alt-img's autodetect picks. Users who installed a specific
-    -- provider directly bypassed autodetect entirely; the per-protocol
-    -- drilldowns below still apply.
-    local ok, p = pcall(require("alt-img")._provider)
-    if ok then
-        local name
-        for _, n in ipairs(PROTOCOLS) do
-            if p == require("alt-img." .. n) then
-                name = n
-                break
-            end
-        end
-        h.ok(string.format("Active provider: %s (autodetected)", name or "?"))
-    else
+    local ok, p = pcall(require("alt-img").provider)
+    if not ok or not p then
         h.error(string.format("Active provider: none detected (%s)", tostring(p)))
+        return
     end
+    local name
+    for _, n in ipairs(PROTOCOLS) do
+        if p == require("alt-img." .. n) then
+            name = n
+            break
+        end
+    end
+    h.ok(string.format("Active provider: %s (autodetected)", name or "?"))
 end
 
 ---@param h vim.health.Report

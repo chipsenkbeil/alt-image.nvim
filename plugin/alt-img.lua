@@ -1,9 +1,3 @@
--- Auto-loaded by Neovim's runtimepath. Keep this file deliberately small —
--- it should not eagerly `require()` the alt-img modules. Each command's
--- callback defers to `lua/alt-img/_core/cmd.lua` so the plugin only pays its
--- module-load cost when the user actually invokes a command (or sets
--- vim.ui.img to one of our providers).
-
 if vim.g.loaded_alt_img then
     return
 end
