@@ -117,7 +117,7 @@ target_h_px = opts.height × cell_h_px × scale
 where `scale ∈ {1, 2, 3, …}` is the max of two signals (OSC 1337
 `ReportCellSize` for iTerm2/WezTerm/Mintty/Konsole/Tabby; CSI 14t/18t/16t
 geometry for everyone else). User can force a specific value with
-`vim.g.alt_img.sixel_pixel_scale`.
+`vim.g.alt_img.sixel.pixel_scale`.
 
 iTerm2's OSC 1337 path doesn't need this — it interprets `width=N` /
 `height=N` cell-unit fields with retina-awareness internally — so the
@@ -308,7 +308,7 @@ magick space.
 - **Pixel-scale auto-detect requires CSI/OSC support.** Terminals that
   ignore both OSC 1337 ReportCellSize and CSI 14t/18t will get
   `scale = 1`. If that produces a wrong size, fall back to
-  `vim.g.alt_img.sixel_pixel_scale = N`.
+  `vim.g.alt_img.sixel.pixel_scale = N`.
 - **No animated sixel.** Each `set()` produces a single frame; the
   protocol supports cursor positioning + repeated emits but we don't
   use it.

@@ -3,10 +3,7 @@ describe("vim.ui.img.set on slow path", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false, -- forces pure-Lua INFLATE → slow encode
+                processing = { tools = false }, -- pure-Lua only → slow encode
                 -- Disable precompute so we don't have to disambiguate its
                 -- coroutines from set()'s.
                 precompute = { enabled = false },

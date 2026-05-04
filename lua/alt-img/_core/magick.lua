@@ -3,8 +3,11 @@ local M = {}
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-    local config = require("alt-img._core.config")
-    return require("alt-img._core.binary").resolve(config.read().magick)
+    local processing = require("alt-img._core.processing")
+    if not processing.is_enabled("magick") then
+        return nil
+    end
+    return require("alt-img._core.binary").resolve(processing.candidates("magick"))
 end
 
 local function run(cmd, stdin)

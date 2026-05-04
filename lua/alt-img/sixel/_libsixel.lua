@@ -3,8 +3,11 @@ local M = {}
 ---Return the resolved binary name to invoke, or nil if disabled / not found.
 ---@return string?
 function M.binary()
-    local config = require("alt-img._core.config")
-    return require("alt-img._core.binary").resolve(config.read().img2sixel)
+    local processing = require("alt-img._core.processing")
+    if not processing.is_enabled("img2sixel") then
+        return nil
+    end
+    return require("alt-img._core.binary").resolve(processing.candidates("img2sixel"))
 end
 
 ---@param opts? { colors?: integer, w_px?: integer, h_px?: integer, crop?: { x: integer, y: integer, w: integer, h: integer } }

@@ -12,10 +12,7 @@ describe("placeholder lifecycle on slow path", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false,
+                processing = { tools = false },
                 precompute = { enabled = false },
                 cache = { enabled = false },
                 placeholder = { enabled = true, delay_ms = 30, spinner_interval_ms = 50 },
@@ -32,10 +29,7 @@ describe("placeholder lifecycle on slow path", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false,
+                processing = { tools = false },
                 precompute = { enabled = false },
                 cache = { enabled = false },
                 placeholder = { enabled = true, delay_ms = 30, spinner_interval_ms = 50 },
@@ -60,10 +54,7 @@ describe("placeholder lifecycle on slow path", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false,
+                processing = { tools = false },
                 precompute = { enabled = false },
                 cache = { enabled = false },
                 placeholder = { enabled = false },
@@ -92,10 +83,7 @@ describe("placeholder cancellation matrix", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false,
+                processing = { tools = false },
                 precompute = { enabled = false },
                 cache = { enabled = false },
                 placeholder = { enabled = true, delay_ms = 30 },
@@ -115,10 +103,7 @@ describe("placeholder cancellation matrix", function()
         local nvim = ctx:spawn({
             provider = "sixel",
             config = {
-                magick = false,
-                img2sixel = false,
-                chafa = false,
-                libz = false,
+                processing = { tools = false },
                 precompute = { enabled = false },
                 cache = { enabled = false },
                 placeholder = { enabled = true, delay_ms = 30 },

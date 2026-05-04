@@ -124,24 +124,39 @@ function M.info_lines()
 
     local magick = require("alt-img._core.magick").binary()
     local libsixel = require("alt-img.sixel._libsixel").binary()
+    local chafa = require("alt-img.sixel._chafa").binary()
     local png = require("alt-img._core.png")
+    local processing = require("alt-img._core.processing")
+    local pcfg = processing.read()
     lines[#lines + 1] = ""
     lines[#lines + 1] = "External tools:"
-    lines[#lines + 1] = string.format("  vim.g.alt_img.magick    = %s", vim.inspect(g.magick))
-    lines[#lines + 1] = string.format("  vim.g.alt_img.img2sixel = %s", vim.inspect(g.img2sixel))
-    lines[#lines + 1] = string.format("  resolved magick         = %s", magick or "not used")
-    lines[#lines + 1] = string.format("  resolved img2sixel      = %s", libsixel or "not used")
-    lines[#lines + 1] =
-        string.format("  PNG libz compression    = %s", png.has_libz() and "active" or "fallback (stored blocks)")
+    lines[#lines + 1] = string.format("  vim.g.alt_img.processing.tools     = %s", vim.inspect(pcfg.tools))
+    lines[#lines + 1] = string.format("  vim.g.alt_img.processing.magick    = %s", vim.inspect(pcfg.magick))
+    lines[#lines + 1] = string.format("  vim.g.alt_img.processing.img2sixel = %s", vim.inspect(pcfg.img2sixel))
+    lines[#lines + 1] = string.format("  vim.g.alt_img.processing.chafa     = %s", vim.inspect(pcfg.chafa))
+    lines[#lines + 1] = string.format("  vim.g.alt_img.processing.libz      = %s", vim.inspect(pcfg.libz))
+    lines[#lines + 1] = string.format("  resolved magick                    = %s", magick or "not used")
+    lines[#lines + 1] = string.format("  resolved img2sixel                 = %s", libsixel or "not used")
+    lines[#lines + 1] = string.format("  resolved chafa                     = %s", chafa or "not used")
+    lines[#lines + 1] = string.format(
+        "  PNG libz compression               = %s",
+        png.has_libz() and "active" or "fallback (stored blocks)"
+    )
+    local order = processing.ordered_tools({ "chafa", "img2sixel", "magick" })
+    lines[#lines + 1] = string.format(
+        "  effective sixel encoder order      = %s",
+        #order > 0 and table.concat(order, ", ") or "(none — pure-Lua fallback only)"
+    )
 
     -- sixel pixel scale: explicit override + per-source auto-detect breakdown +
     -- the value the encoder will actually multiply by.
     local osc, geom = pixel_scale.sources()
     local final_auto = pixel_scale.current()
-    local effective = (type(g.sixel_pixel_scale) == "number" and g.sixel_pixel_scale >= 1)
-            and math.floor(g.sixel_pixel_scale)
+    local sixel_cfg = (g.sixel or {})
+    local effective = (type(sixel_cfg.pixel_scale) == "number" and sixel_cfg.pixel_scale >= 1)
+            and math.floor(sixel_cfg.pixel_scale)
         or final_auto
-    lines[#lines + 1] = string.format("  vim.g.alt_img.sixel_pixel_scale = %s", vim.inspect(g.sixel_pixel_scale))
+    lines[#lines + 1] = string.format("  vim.g.alt_img.sixel.pixel_scale = %s", vim.inspect(sixel_cfg.pixel_scale))
     lines[#lines + 1] =
         string.format("  scale via OSC 1337              = %s", osc > 0 and (osc .. "×") or "no answer")
     lines[#lines + 1] =

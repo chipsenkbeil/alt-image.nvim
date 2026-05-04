@@ -334,14 +334,15 @@ local function _encode_sixel(rgba, w, h)
     return table.concat(out)
 end
 
----Encode an RGBA buffer to a sixel DCS string. Priority chain:
----chafa → img2sixel (libsixel) → magick/convert → pure-Lua `_encode_sixel`.
----chafa is preferred because it's the only external encoder that preserves
+---Encode an RGBA buffer to a sixel DCS. Dispatch order follows
+---`vim.g.alt_img.processing.tools` (default `{ chafa, img2sixel, magick }`,
+---then pure-Lua tail). chafa is the only external encoder that preserves
 ---PNG alpha (P2=1, no bits at transparent positions); the others flatten
----alpha against a background color (default black). The pure-Lua tail also
----preserves alpha. External tools all want PNG on stdin, so RGBA input pays
----one png.encode hop unless we fall through to the magick raw-RGBA fast
----path (only worth taking when chafa and libsixel are both unavailable).
+---alpha against a background color (default black). The pure-Lua tail
+---also preserves alpha. External tools all want PNG on stdin, so RGBA
+---input pays one png.encode hop unless we fall through to the magick
+---raw-RGBA fast path (only worth taking when chafa and libsixel are both
+---unavailable).
 ---@param rgba string
 ---@param w_px integer
 ---@param h_px integer
@@ -351,6 +352,7 @@ function M.encode_sixel_dispatch(rgba, w_px, h_px)
     local chafa = require("alt-img.sixel._chafa")
     local libsixel = require("alt-img.sixel._libsixel")
     local magick = require("alt-img._core.magick")
+    local processing = require("alt-img._core.processing")
 
     local has_chafa = chafa.binary() ~= nil
     local has_libsixel = libsixel.binary() ~= nil
@@ -360,6 +362,8 @@ function M.encode_sixel_dispatch(rgba, w_px, h_px)
     -- (uncompressed) blocks, so the PNG hop dominates. Only worth taking when
     -- magick is the only subprocess tool we'd reach — chafa/libsixel both
     -- need PNG anyway, so once we've paid png.encode they're cheaper to chain.
+    -- (Each `has_X` already incorporates the processing.tools filter via the
+    -- per-tool resolver gate; no extra work needed here.)
     if has_magick and not has_chafa and not has_libsixel and not png.has_libz() then
         local out = magick.encode_sixel_from_rgba(rgba, w_px, h_px)
         if out and #out > 0 then
@@ -371,20 +375,19 @@ function M.encode_sixel_dispatch(rgba, w_px, h_px)
     if has_chafa or has_libsixel or has_magick then
         png_bytes = png.encode(rgba, w_px, h_px)
     end
-    if has_chafa and png_bytes then
-        local out = chafa.encode_sixel(png_bytes)
-        if out and #out > 0 then
-            return out
+    -- Dispatch in user-specified order. processing.ordered_tools intersects
+    -- the requested encoder set with cfg.processing.tools, preserving the
+    -- user's order, so a user setting tools = { 'magick', 'chafa' } gets
+    -- magick attempted first.
+    for _, name in ipairs(processing.ordered_tools({ "chafa", "img2sixel", "magick" })) do
+        local out
+        if name == "chafa" and has_chafa then
+            out = chafa.encode_sixel(png_bytes)
+        elseif name == "img2sixel" and has_libsixel then
+            out = libsixel.encode_sixel(png_bytes)
+        elseif name == "magick" and has_magick then
+            out = magick.encode_sixel_from_png(png_bytes)
         end
-    end
-    if has_libsixel and png_bytes then
-        local out = libsixel.encode_sixel(png_bytes)
-        if out and #out > 0 then
-            return out
-        end
-    end
-    if has_magick and png_bytes then
-        local out = magick.encode_sixel_from_png(png_bytes)
         if out and #out > 0 then
             return out
         end

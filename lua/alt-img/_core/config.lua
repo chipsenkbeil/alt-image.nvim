@@ -19,29 +19,23 @@
 ---@field idle_threshold_ms? integer  skip step if user active within this window (default 500)
 ---@field notify? boolean  vim.notify on precompute start/finish (default false)
 
+---@class alt-img._core.SixelConfig
+---@field pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
+
 ---@class alt-img._core.Config
 ---@field autodetect? string[]  provider names autodetect probes, in order; first supported wins
----@field magick? string|string[]|false  magick CLI candidate(s); false disables
----@field img2sixel? string|string[]|false  img2sixel CLI candidate(s); false disables
----@field chafa? string|string[]|false  chafa CLI candidate(s); preferred for transparent PNGs
----@field libz? string|string[]|false  libz dylib name(s) to ffi.load; false forces pure-Lua INFLATE
----@field sixel_pixel_scale? integer  explicit override for sixel logical/physical scale (nil = auto)
 ---@field cell_pixel_size? integer[]  explicit { width, height } override for terminal cell size (nil = CSI 16t probe)
+---@field sixel? alt-img._core.SixelConfig  sixel-only knobs
+---@field processing? alt-img._core.processing.Config  external/FFI acceleration tools
 ---@field precompute? alt-img._core.PrecomputeConfig  background crop-variant warmer
 ---@field cache? alt-img._core.CacheConfig  on-disk encode cache
 ---@field placeholder? alt-img._core.PlaceholderConfig  loading-state placeholder rendering
 
 local M = {}
 
--- `sixel_pixel_scale` is intentionally absent so nil means "auto-detect
--- via pixel_scale.current()"; any integer wins over auto.
 ---@type alt-img._core.Config
 local DEFAULTS = {
     autodetect = { "iterm2", "sixel" },
-    chafa = { "chafa" },
-    img2sixel = { "img2sixel" },
-    libz = { "z", "zlib", "zlib1", "libz" },
-    magick = { "magick", "convert" },
     placeholder = {
         enabled = true,
         delay_ms = 100,

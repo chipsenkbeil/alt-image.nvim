@@ -42,14 +42,14 @@ local function tooling(h)
     if magick then
         h.ok("ImageMagick: " .. magick)
     else
-        h.info("ImageMagick: not found " .. "(set vim.g.alt_img.magick or install magick/convert)")
+        h.info("ImageMagick: not found " .. "(set vim.g.alt_img.processing.magick or install magick/convert)")
     end
 
     local libsixel = require("alt-img.sixel._libsixel").binary()
     if libsixel then
         h.ok("libsixel: " .. libsixel)
     else
-        h.info("libsixel: not found " .. "(set vim.g.alt_img.img2sixel or install)")
+        h.info("libsixel: not found " .. "(set vim.g.alt_img.processing.img2sixel or install)")
     end
 
     local chafa = require("alt-img.sixel._chafa").binary()
@@ -82,6 +82,23 @@ local function tooling(h)
                 .. "to `magick` to skip the PNG hop. Install zlib (Windows: ensure "
                 .. "zlib1.dll is on PATH) for the compressed-PNG path."
         )
+    end
+
+    -- Catch typos in processing.tools — names that aren't recognized are
+    -- silently ignored at the resolver layer, so surface them here.
+    local KNOWN = { magick = true, img2sixel = true, chafa = true, libz = true }
+    local pcfg = require("alt-img._core.processing").read()
+    if type(pcfg.tools) == "table" then
+        for _, name in ipairs(pcfg.tools) do
+            if not KNOWN[name] then
+                h.warn(
+                    string.format(
+                        "processing.tools contains unknown name '%s' — known tools are magick, img2sixel, chafa, libz",
+                        tostring(name)
+                    )
+                )
+            end
+        end
     end
 end
 

@@ -173,7 +173,7 @@ target_h_px = opts.height × cell_h_px
 cell-pixel size to land on a whole cell count.
 
 Note: iTerm2's OSC 1337 path does **not** apply
-`vim.g.alt_img.sixel_pixel_scale`. iTerm2 already accounts for retina
+`vim.g.alt_img.sixel.pixel_scale`. iTerm2 already accounts for retina
 when interpreting cell-unit `width=` / `height=` params, so doubling
 our PNG dimensions would just over-encode without changing the
 displayed area. (The retina-pixel mismatch only affects sixel — see

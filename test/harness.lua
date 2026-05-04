@@ -56,7 +56,7 @@ function M.spawn(opts)
     -- ~600ms of CSI/OSC timeouts. Tests can override either knob.
     local default_config = {
         cell_pixel_size = { 8, 16 },
-        sixel_pixel_scale = 2,
+        sixel = { pixel_scale = 2 },
     }
     local merged_config = vim.tbl_extend("force", default_config, opts.config or {})
     local init_lua = string.format(INIT_TEMPLATE, rtp, vim.inspect(merged_config), rtp, provider_mod)

@@ -8,17 +8,19 @@ local PNG_SIGNATURE = "\137PNG\r\n\26\n"
 -- Decoder ---------------------------------------------------------------
 
 -- Optional libz FFI fast path. Candidate dylib names come from
--- vim.g.alt_img.libz; default covers Linux/macOS ("z") and Windows
--- ("zlib1"/"zlib"/"libz"). Set `libz = false` to force the pure-Lua
--- inflater below. Lazy-init on first decode so config set after module
--- load (e.g. by tests or late-running setup) still takes effect.
+-- vim.g.alt_img.processing.libz; default covers Linux/macOS ("z") and
+-- Windows ("zlib1"/"zlib"/"libz"). To force the pure-Lua inflater below,
+-- omit "libz" from `processing.tools` (or set `tools = false`). Lazy-init
+-- on first decode so config set after module load (e.g. by tests or
+-- late-running setup) still takes effect.
 local _zlib_uncompress ---@type fun(data:string, expected:integer):string?
 local _zlib_uncompress_inited = false
 local function libz_candidates()
-    local cfg = require("alt-img._core.config").read()
-    local v = cfg.libz
-    -- Falsy (nil/false) → disabled. Empty table also disabled (the
-    -- ffi.load for-loop below just iterates zero times and finds no lib).
+    local processing = require("alt-img._core.processing")
+    if not processing.is_enabled("libz") then
+        return nil
+    end
+    local v = processing.candidates("libz")
     if not v then
         return nil
     end
@@ -28,7 +30,7 @@ local function libz_candidates()
     if type(v) == "table" then
         return v
     end
-    return { "z", "zlib", "zlib1", "libz" }
+    return nil
 end
 local function init_zlib_uncompress()
     if _zlib_uncompress_inited then
@@ -778,7 +780,7 @@ local function zlib_store(raw)
 end
 
 -- Optional libz FFI compress fast path. Lazy-init mirrors the decode-side
--- binding above so vim.g.alt_img.libz set after module load takes effect.
+-- binding above so vim.g.alt_img.processing.libz set after module load takes effect.
 ---@type (fun(data: string, level?: integer): string?)?
 local libz_compress
 local _libz_compress_inited = false

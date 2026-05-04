@@ -3,16 +3,18 @@
 > Drop-in `vim.ui.img` for terminals without the kitty graphics protocol.
 
 Pure-Lua iTerm2 (OSC 1337) and sixel (DCS) providers. Optionally accelerates
-crop + encode through `magick` / `img2sixel` when present.
+crop + encode through `chafa` / `magick` / `img2sixel` / `libz` when present.
 
 ```lua
-vim.ui.img = require('alt-img')          -- autodetect
-vim.ui.img = require('alt-img.iterm2')   -- iTerm2 / WezTerm (OSC 1337)
-vim.ui.img = require('alt-img.sixel')    -- foot, mlterm, xterm+sixel, …
+vim.ui.img = require('alt-img')          -- autodetect the protocol (iterm2 or sixel)
+vim.ui.img = require('alt-img.iterm2')   -- explicitly use iterm2 (e.g. iTerm2, WezTerm)
+vim.ui.img = require('alt-img.sixel')    -- explicitly use sixel (e.g. foot, mlterm, xterm+sixel)
 ```
 
-That's it. After this, `vim.ui.img.set / get / del` works the same as on a
-kitty-capable Neovim build.
+That's it!
+
+After this, `vim.ui.img.set` `vim.ui.img.get`, and `vim.ui.img.del` work the
+same as on a kitty-capable Neovim build.
 
 ## Demos
 
@@ -55,10 +57,8 @@ vim.pack.add({ 'https://github.com/chipsenkbeil/alt-img.nvim' })
 vim.ui.img = require('alt-img')
 ```
 
-Requires Neovim with the `vim.ui.img` API surface (PRs #37914, #39449, #39484,
-#39496). Pure Lua — runs on both LuaJIT and PUC. `libz` is picked up via
-LuaJIT FFI when available for real DEFLATE PNG (with a stored-block
-fallback when it isn't).
+Works fine on neovim `0.12` and should also work on future neovim versions with
+a matching API signature. 
 
 ## Configuration
 
@@ -69,39 +69,42 @@ read at call-time so plugin-load vs. config order doesn't matter:
 ```lua
 vim.g.alt_img = {
   -- Providers `require('alt-img')` probes during autodetection, in order.
-  -- First one whose `_supported()` returns true wins. Set to a single-entry
-  -- list to pin a protocol.
+  -- First one to be supported wins.
   autodetect = { 'iterm2', 'sixel' },
 
-  -- ImageMagick CLI for fast crop + (re)encode. Single name, an ordered
-  -- list of candidates (first executable wins), or any falsy value
-  -- (`false` / `nil` / `{}`) to disable.
-  magick = { 'magick', 'convert' },     -- string | string[] | false | nil
-
-  -- libsixel CLI for fast sixel encoding. Same shape as `magick`.
-  img2sixel = { 'img2sixel' },          -- string | string[] | false | nil
-
-  -- libz dylib(s) to load via LuaJIT FFI for real DEFLATE PNG. Same shape
-  -- as `magick` — first loadable name wins; falsy forces the pure-Lua
-  -- inflater (slower but always available, useful for testing).
-  libz = { 'z', 'zlib', 'zlib1', 'libz' },  -- string | string[] | false | nil
-
-  -- chafa CLI for transparent-PNG sixel encoding. Only relevant for the
-  -- sixel provider; it's preferred when a PNG has alpha because chafa is
-  -- the only external encoder that preserves transparency. Same shape as
-  -- `magick`.
-  chafa = { 'chafa' },                  -- string | string[] | false | nil
-
-  -- Override the sixel logical-vs-physical pixel scale. `nil` = auto-detect
-  -- via OSC 1337 ReportCellSize and CSI 14t / 18t / 16t geometry. Set to
-  -- 1, 2, … to force a value when auto-detect misreads your terminal.
-  sixel_pixel_scale = nil,              -- integer | nil
-
   -- Override the terminal cell pixel size as `{ width_px, height_px }`.
+  --
   -- `nil` = probe via CSI 16t (default). Set explicitly when your
   -- terminal doesn't answer CSI 16t or you want to skip the ~250 ms
   -- probe timeout on first call.
-  cell_pixel_size = nil,                -- { integer, integer } | nil
+  cell_pixel_size = nil,                  -- { integer, integer } | nil
+
+  -- Sixel-only knobs to turn.
+  sixel = {
+    -- Override the sixel logical-vs-physical pixel scale. `nil` = auto
+    -- via OSC 1337 ReportCellSize and CSI 14t / 18t / 16t geometry. Set
+    -- to 1, 2, … to force a value when auto-detect misreads your
+    -- terminal.
+    pixel_scale = nil,                    -- integer | nil
+  },
+
+  -- External / FFI acceleration tools.
+  processing = {
+    -- Enabled tools, in order.
+    -- Prefer chafa first (only encoder that preserves PNG alpha), then
+    -- img2sixel, then magick, with the pure-Lua tail catching anything
+    -- that falls through. 
+    --
+    -- Drop a name to disable it; set to `false` for pure-Lua only.
+    tools = { 'chafa', 'img2sixel', 'magick', 'libz' },
+
+    -- Per-tool candidate binary (or, for libz, FFI dylib) names.
+    -- First entry that resolves on PATH wins.
+    magick    = { 'magick', 'convert' },          -- string | string[]
+    img2sixel = { 'img2sixel' },                  -- string | string[]
+    chafa     = { 'chafa' },                      -- string | string[]
+    libz      = { 'z', 'zlib', 'zlib1', 'libz' }, -- string | string[]
+  },
 
   -- Background pre-encode of crop variants on `set()` so subsequent partial
   -- redraws hit warm cache. `enabled = false` disables the warmer entirely.
@@ -115,9 +118,10 @@ vim.g.alt_img = {
 
   -- On-disk encode cache. Sixel DCS and resized/cropped PNGs are persisted
   -- under `stdpath('cache') .. '/alt-img/'`, keyed by sha256 of input bytes
-  -- + target pixel dims + crop rect. The same image at the same dims hits
-  -- the cache across nvim sessions, machines (if you sync the dir), and
-  -- between the iterm2 and sixel codecs.
+  -- + target pixel dims + crop rect.
+  --
+  -- The same image at the same dims hits the cache across nvim sessions,
+  -- machines (if you sync the dir), and between the iterm2 and sixel codecs.
   cache = {
     enabled    = true,
     dir        = nil,                 -- string | nil  (nil = stdpath('cache') .. '/alt-img')
@@ -125,16 +129,15 @@ vim.g.alt_img = {
     max_age_days = nil,               -- integer | nil (drop entries older than this on read)
   },
 
-  -- Loading-state placeholder. Drawn in the cell rectangle while a slow
-  -- pure-Lua encode runs (i.e. when neither magick nor libz is available
-  -- to accelerate decode/encode). A rounded box outline + Braille spinner
-  -- + percent caption animate until the image is ready. `set()` returns
-  -- immediately; the placeholder lives in the carrier (float buffer for
-  -- relative=editor, virt_lines for relative=buffer, transient float for
-  -- relative=ui) and is replaced when the encoded image bytes emit.
+  -- Loading-state placeholder. Drawn in the cell rectangle when an image takes
+  -- awhile to load whether by encoding or something else.
+  --
+  -- This is particularly common if `libz` is unavailable and you do not have
+  -- an external tool like `chafa` or `magick` to help accelerate encoding &
+  -- decoding of PNGs.
   placeholder = {
     enabled              = true,
-    delay_ms             = 100,         -- skip placeholder for fast encodes
+    delay_ms             = 100,         -- skip placeholder if under X milliseconds
     spinner_interval_ms  = 120,         -- spinner glyph advance cadence
     box                  = 'rounded',   -- 'rounded'|'single'|'dotted'|'heavy'|'none'
     spinner              = 'braille',   -- 'braille'|'quarter'|'half'|'bar'|'fade'|'classic'
@@ -142,11 +145,6 @@ vim.g.alt_img = {
   },
 }
 ```
-
-The crop LRU sizes itself per-placement from the image's height (it holds
-exactly the precompute output, `2 * (height - 1)` entries, with a 64-entry
-floor). Async `magick` parallelism scales with `vim.uv.available_parallelism()`
-(1 on a single-core box, 2 otherwise). Neither needs a knob.
 
 ### Placeholder highlight
 
@@ -172,7 +170,7 @@ external-tool detection — runs in ~400ms worst case.
 :checkhealth alt-img.sixel
 ```
 
-…drill into a single protocol.
+Provides specific insight into a provider.
 
 ## Commands
 

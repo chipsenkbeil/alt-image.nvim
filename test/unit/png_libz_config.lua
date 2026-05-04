@@ -15,12 +15,13 @@ describe("_core.png libz config", function()
         local png_default = require("alt-img._core.png")
         local img_default = png_default.decode(data)
 
-        -- Force pure-Lua via config + module reload.
+        -- Force pure-Lua via processing.tools = false + module reload.
         local prev = vim.g.alt_img
-        vim.g.alt_img = vim.tbl_extend("force", prev or {}, { libz = false })
+        vim.g.alt_img = vim.tbl_extend("force", prev or {}, { processing = { tools = false } })
         package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.processing"] = nil
         local png_no_libz = require("alt-img._core.png")
-        assert.falsy(png_no_libz.has_libz(), "libz=false → has_libz() returns false")
+        assert.falsy(png_no_libz.has_libz(), "tools=false → has_libz() returns false")
         local img_no_libz = png_no_libz.decode(data)
 
         assert.eq(img_no_libz.width, img_default.width)
@@ -33,16 +34,19 @@ describe("_core.png libz config", function()
         -- Restore + reload for downstream tests
         vim.g.alt_img = prev
         package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.processing"] = nil
     end)
 
     it("custom libz candidate as string is accepted", function()
         local prev = vim.g.alt_img
-        vim.g.alt_img = vim.tbl_extend("force", prev or {}, { libz = "nonexistent_libz" })
+        vim.g.alt_img = vim.tbl_extend("force", prev or {}, { processing = { libz = "nonexistent_libz" } })
         package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.processing"] = nil
         local png = require("alt-img._core.png")
         -- Single-string non-loadable name → no FFI binding, but module loads
         assert.falsy(png.has_libz(), "non-loadable name → has_libz false")
         vim.g.alt_img = prev
         package.loaded["alt-img._core.png"] = nil
+        package.loaded["alt-img._core.processing"] = nil
     end)
 end)

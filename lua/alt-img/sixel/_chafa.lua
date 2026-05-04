@@ -2,8 +2,11 @@ local M = {}
 
 ---@return string?
 function M.binary()
-    local config = require("alt-img._core.config")
-    return require("alt-img._core.binary").resolve(config.read().chafa)
+    local processing = require("alt-img._core.processing")
+    if not processing.is_enabled("chafa") then
+        return nil
+    end
+    return require("alt-img._core.binary").resolve(processing.candidates("chafa"))
 end
 
 ---Build the chafa argv shared by sync/async entry points.

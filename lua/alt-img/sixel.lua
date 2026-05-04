@@ -29,8 +29,9 @@ end
 ---@return integer
 local function sixel_scale()
     local cfg = require("alt-img._core.config").read() or {}
-    if type(cfg.sixel_pixel_scale) == "number" then
-        return math.max(1, math.floor(cfg.sixel_pixel_scale))
+    local sixel_cfg = cfg.sixel or {}
+    if type(sixel_cfg.pixel_scale) == "number" then
+        return math.max(1, math.floor(sixel_cfg.pixel_scale))
     end
     return require("alt-img._core.pixel_scale").current()
 end

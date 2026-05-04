@@ -1,9 +1,5 @@
 # alt-img.nvim architecture
 
-> **Public API contract:** see [API.md](API.md). This document describes
-> the *implementation* — schedulers, caches, autocmds — that backs the
-> contract.
-
 Reference for everything inside the `lua/alt-img/` tree: how a `set()` call
 turns into pixels on the terminal, when those pixels get re-emitted, when
 they get cleared, where the caches sit, and which subprocess runs where.
@@ -75,10 +71,10 @@ test/                           -- automated test suite (see §15)
 
 The `_core/` modules are private. Callers come from `init.lua`,
 `iterm2.lua`, `sixel.lua`, or the user command. The two provider modules
-and the dispatcher (`init.lua`) export the public `set/get/del/_supported`
-surface (see [API.md](API.md)). `init.lua` additionally exposes
-`provider()` (returns the autodetect-resolved provider) for `:checkhealth`
-and `:AltImg info`.
+and the dispatcher (`init.lua`) export the public
+`set/get/del/_supported` surface (mirroring upstream `vim.ui.img`).
+`init.lua` additionally exposes `provider()` (returns the
+autodetect-resolved provider) for `:checkhealth` and `:AltImg info`.
 
 ---
 
@@ -141,7 +137,7 @@ codec adapter ──► magick.lua / sixel/_libsixel.lua  (subprocess via subpro
 
 ## 3. Public API contract
 
-The full contract is in [API.md](API.md). In brief:
+Mirrors upstream `vim.ui.img`. In brief:
 
 | Function | Description |
 |---|---|
@@ -508,7 +504,7 @@ literally returns the screen scale factor as the third field of the
 reply). The geometry path is the fallback for terminals that don't —
 same trick `chafa` uses.
 
-Manual override: `vim.g.alt_img.sixel_pixel_scale = N`. When set to a
+Manual override: `vim.g.alt_img.sixel.pixel_scale = N`. When set to a
 number, both auto-detect signals are skipped.
 
 **Fast-path short-circuit:** `pixel_scale.current()` checks `WT_SESSION`
@@ -766,8 +762,6 @@ only the visible box+spinner is suppressed.
 - `make format-check` — stylua format gate.
 - `make lint` — guards the public surface (`_supported` is the only
   underscore export allowed on init/iterm2/sixel).
-- `make verify-api` — diffs pinned upstream `vim.ui.img` SHAs in
-  `~/projects/neovim` against API.md.
 - `:checkhealth alt-img alt-img.iterm2 alt-img.sixel` — protocol probes
   + tool detection.
 - `:AltImg info` — full diagnostic dump in a scratch buffer (not print,
@@ -864,7 +858,7 @@ A test is NOT allowed to:
 ### Headless-friendly config defaults
 
 The harness's default `vim.g.alt_img` includes `cell_pixel_size = { 8, 16 }`
-and `sixel_pixel_scale = 2` so e2e blocks don't pay ~600 ms of CSI 16t /
+and `sixel.pixel_scale = 2` so e2e blocks don't pay ~600 ms of CSI 16t /
 OSC 1337 / CSI 14t timeouts on each spawn. Tests can override either via
 the per-block config table. Provider autodetect can't probe a real
 terminal in headless mode either, so each `harness()` block pins
