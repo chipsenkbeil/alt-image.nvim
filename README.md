@@ -14,6 +14,21 @@ vim.ui.img = require('alt-img.sixel')    -- foot, mlterm, xterm+sixel, …
 That's it. After this, `vim.ui.img.set / get / del` works the same as on a
 kitty-capable Neovim build.
 
+## Demos
+
+ <table>
+    <tr>
+      <td><video src="https://github.com/user-attachments/assets/d56cf170-30ab-4f95-b5b7-4a68ad86e29e" /></td>
+      <td><video src="https://github.com/user-attachments/assets/87f0ba2e-a5ba-4dcf-b1ec-f81a0ad9c9fe" /></td>
+      <td><video src="https://github.com/user-attachments/assets/64da2fe0-f42c-44f2-9a39-a26bd7d66bc6" /></td>
+    </tr>
+    <tr>
+      <td align="center">iTerm2 protocol (iTerm2)</td>
+      <td align="center">Sixel protocol (Windows Terminal)</td>
+      <td align="center">Placeholder loading status when slow</td>
+    </tr>
+  </table>
+
 ## Input format
 
 `set(data, opts)` requires `data` to be **PNG bytes** (the same contract as
